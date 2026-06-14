@@ -98,19 +98,13 @@ app.innerHTML = `
         <button id="connect" type="button">Connect Pico</button>
         <button id="disconnect" type="button" disabled>Disconnect</button>
         <div class="calibration-controls">
-          <button id="calibrate-pose" type="button" class="secondary">Calibrate</button>
+          <button id="calibrate-pose" type="button" class="secondary">Zero Pose</button>
+          <button id="show-orientation-cal" type="button" class="secondary">Map Motion</button>
           <span id="north-offset">Pose offset waiting</span>
         </div>
         <div class="utility-actions">
           <button id="show-raw" type="button" class="secondary">Raw Data</button>
           <button id="show-wiring" type="button" class="secondary">Wiring</button>
-        </div>
-        <div class="axis-controls" aria-label="GY-271 axis mapping">
-          <span>GY-271 axis map</span>
-          <label><input id="swap-xy" type="checkbox" /> Swap X/Y</label>
-          <label><input id="invert-x" type="checkbox" /> Invert X</label>
-          <label><input id="invert-y" type="checkbox" /> Invert Y</label>
-          <label><input id="invert-heading" type="checkbox" /> Reverse heading</label>
         </div>
         <label class="toggle">
           <input id="demo" type="checkbox" />
@@ -217,6 +211,35 @@ app.innerHTML = `
       <button id="parse-manual" type="button" class="secondary">Parse Line</button>
       </div>
     </dialog>
+    <dialog id="orientation-dialog" class="modal">
+      <div class="modal-card">
+        <div class="modal-title">
+          <div>
+            <span>Orientation mapping</span>
+            <strong>Capture known positions</strong>
+          </div>
+          <button id="close-orientation-cal" type="button" class="icon-button" aria-label="Close orientation mapping">x</button>
+        </div>
+        <div class="orientation-map">
+          <div class="wiring-note">
+            <strong>Live accelerometer</strong>
+            <span id="orientation-live">Connect the Pico and hold the frame still.</span>
+          </div>
+          <div id="orientation-steps" class="orientation-steps">
+            <button type="button" data-pose="level">Capture Level Upright</button>
+            <button type="button" data-pose="noseUp">Capture Nose Up</button>
+            <button type="button" data-pose="noseDown">Capture Nose Down</button>
+            <button type="button" data-pose="rightDown">Capture Right Side Down</button>
+            <button type="button" data-pose="leftDown">Capture Left Side Down</button>
+          </div>
+          <code id="orientation-result">No orientation samples captured yet.</code>
+          <div class="utility-actions">
+            <button id="apply-orientation-cal" type="button">Apply Mapping</button>
+            <button id="reset-orientation-cal" type="button" class="secondary">Reset Mapping</button>
+          </div>
+        </div>
+      </div>
+    </dialog>
   </main>
 `;
 
@@ -243,6 +266,14 @@ const els = {
   connect: document.querySelector("#connect"),
   disconnect: document.querySelector("#disconnect"),
   calibratePose: document.querySelector("#calibrate-pose"),
+  showOrientationCal: document.querySelector("#show-orientation-cal"),
+  closeOrientationCal: document.querySelector("#close-orientation-cal"),
+  orientationDialog: document.querySelector("#orientation-dialog"),
+  orientationLive: document.querySelector("#orientation-live"),
+  orientationSteps: document.querySelector("#orientation-steps"),
+  orientationResult: document.querySelector("#orientation-result"),
+  applyOrientationCal: document.querySelector("#apply-orientation-cal"),
+  resetOrientationCal: document.querySelector("#reset-orientation-cal"),
   showRaw: document.querySelector("#show-raw"),
   closeRaw: document.querySelector("#close-raw"),
   rawDialog: document.querySelector("#raw-dialog"),
@@ -250,26 +281,13 @@ const els = {
   closeWiring: document.querySelector("#close-wiring"),
   wiringDialog: document.querySelector("#wiring-dialog"),
   northOffset: document.querySelector("#north-offset"),
-  swapXY: document.querySelector("#swap-xy"),
-  invertX: document.querySelector("#invert-x"),
-  invertY: document.querySelector("#invert-y"),
-  invertHeading: document.querySelector("#invert-heading"),
   demo: document.querySelector("#demo"),
   manualLine: document.querySelector("#manual-line"),
   parseManual: document.querySelector("#parse-manual"),
 };
 
-const calibrationVersion = localStorage.getItem("gy271CalibrationVersion");
-if (calibrationVersion !== "2") {
-  localStorage.setItem(
-    "gy271AxisMap",
-    JSON.stringify({ swapXY: false, invertX: false, invertY: true, invertHeading: false }),
-  );
-  localStorage.setItem("gy271HardIronOffset", JSON.stringify({ x: 286, y: 63 }));
-  localStorage.setItem("gy271CalibrationVersion", "2");
-}
-const savedAxisMap = JSON.parse(localStorage.getItem("gy271AxisMap") ?? "{}");
-const savedHardIron = JSON.parse(localStorage.getItem("gy271HardIronOffset") ?? "{}");
+const savedOrientationMap = JSON.parse(localStorage.getItem("adxlOrientationMap") ?? "null");
+const savedOrientationSamples = JSON.parse(localStorage.getItem("adxlOrientationSamples") ?? "{}");
 
 const state = {
   x: 0,
@@ -290,16 +308,8 @@ const state = {
   pitchZeroDeg: 0,
   rollZeroDeg: 0,
   autoCalibrated: false,
-  axisMap: {
-    swapXY: Boolean(savedAxisMap.swapXY),
-    invertX: Boolean(savedAxisMap.invertX),
-    invertY: savedAxisMap.invertY ?? true,
-    invertHeading: Boolean(savedAxisMap.invertHeading),
-  },
-  hardIron: {
-    x: Number.isFinite(Number(savedHardIron.x)) ? Number(savedHardIron.x) : 286,
-    y: Number.isFinite(Number(savedHardIron.y)) ? Number(savedHardIron.y) : 63,
-  },
+  orientationMap: isValidOrientationMap(savedOrientationMap) ? savedOrientationMap : null,
+  orientationSamples: savedOrientationSamples && typeof savedOrientationSamples === "object" ? savedOrientationSamples : {},
   sensor: "Disconnected",
   connected: false,
   port: null,
@@ -922,6 +932,90 @@ function parseRcFields(line) {
   return channels;
 }
 
+function isValidOrientationMap(map) {
+  return Boolean(
+    map &&
+      Array.isArray(map.forward) &&
+      Array.isArray(map.right) &&
+      Array.isArray(map.level) &&
+      map.forward.length === 3 &&
+      map.right.length === 3 &&
+      map.level.length === 3,
+  );
+}
+
+function normalizeVector(vector) {
+  const length = Math.hypot(vector[0], vector[1], vector[2]);
+  if (length < 0.0001) return null;
+  return vector.map((value) => value / length);
+}
+
+function subtractVectors(a, b) {
+  return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+}
+
+function dotVector(a, b) {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+function calculateMappedAttitude(ax, ay, az) {
+  if (!isValidOrientationMap(state.orientationMap)) return null;
+  const raw = [ax, ay, az];
+  const forward = dotVector(raw, state.orientationMap.forward);
+  const right = dotVector(raw, state.orientationMap.right);
+  const level = dotVector(raw, state.orientationMap.level);
+  return {
+    pitch: THREE.MathUtils.radToDeg(Math.atan2(forward, Math.sqrt(right * right + level * level))),
+    roll: THREE.MathUtils.radToDeg(Math.atan2(right, Math.abs(level))),
+  };
+}
+
+function buildOrientationMap(samples) {
+  const required = ["level", "noseUp", "noseDown", "rightDown", "leftDown"];
+  if (!required.every((key) => Array.isArray(samples[key]))) return null;
+  const forward = normalizeVector(subtractVectors(samples.noseUp, samples.noseDown));
+  const right = normalizeVector(subtractVectors(samples.rightDown, samples.leftDown));
+  const level = normalizeVector(samples.level);
+  if (!forward || !right || !level) return null;
+  return { forward, right, level };
+}
+
+function saveOrientationCalibration() {
+  localStorage.setItem("adxlOrientationSamples", JSON.stringify(state.orientationSamples));
+  if (state.orientationMap) {
+    localStorage.setItem("adxlOrientationMap", JSON.stringify(state.orientationMap));
+  } else {
+    localStorage.removeItem("adxlOrientationMap");
+  }
+}
+
+function updateOrientationLive() {
+  if (!els.orientationLive) return;
+  els.orientationLive.textContent = `ax=${state.ax.toFixed(3)} ay=${state.ay.toFixed(3)} az=${state.az.toFixed(
+    3,
+  )} pitch=${state.pitch.toFixed(1)} roll=${state.roll.toFixed(1)}`;
+}
+
+function updateOrientationResult() {
+  const labels = {
+    level: "level",
+    noseUp: "nose up",
+    noseDown: "nose down",
+    rightDown: "right side down",
+    leftDown: "left side down",
+  };
+  const captured = Object.entries(labels)
+    .map(([key, label]) => `${label}: ${Array.isArray(state.orientationSamples[key]) ? "captured" : "missing"}`)
+    .join("\n");
+  const map = buildOrientationMap(state.orientationSamples);
+  const mapText = map
+    ? `\n\nProposed mapping:\nforward=[${map.forward.map((value) => value.toFixed(2)).join(", ")}]\nright=[${map.right
+        .map((value) => value.toFixed(2))
+        .join(", ")}]\nlevel=[${map.level.map((value) => value.toFixed(2)).join(", ")}]`
+    : "\n\nCapture all positions to calculate a mapping.";
+  els.orientationResult.textContent = `${captured}${mapText}`;
+}
+
 function applyReading(reading) {
   if (!reading) return false;
 
@@ -933,9 +1027,6 @@ function applyReading(reading) {
   state.mappedX = mapped.x;
   state.mappedY = mapped.y;
   state.heading = headingFromAxes(mapped.x, mapped.y);
-  if (state.axisMap.invertHeading) {
-    state.heading = normalizeDegrees(360 - state.heading);
-  }
   state.tof = reading.tof ?? [null, null, null, null];
   state.rc = reading.rc ?? [null, null, null, null, null, null, null, null];
   state.ax = reading.attitude?.ax ?? 0;
@@ -945,12 +1036,15 @@ function applyReading(reading) {
   const rawRoll = reading.attitude?.roll ?? 0;
   state.rawPitch = rawPitch;
   state.rawRoll = rawRoll;
+  const mappedAttitude = calculateMappedAttitude(state.ax, state.ay, state.az);
+  const displayPitch = mappedAttitude?.pitch ?? rawPitch;
+  const displayRoll = mappedAttitude?.roll ?? rawRoll;
   if (!state.autoCalibrated && reading.attitude?.present) {
-    calibrateCurrentPose(rawPitch, rawRoll);
+    calibrateCurrentPose(displayPitch, displayRoll);
   }
   state.calibratedHeading = normalizeDegrees(state.heading + state.northOffsetDeg);
-  state.pitch = rawPitch - state.pitchZeroDeg;
-  state.roll = normalizeSignedDegrees(rawRoll - state.rollZeroDeg);
+  state.pitch = displayPitch - state.pitchZeroDeg;
+  state.roll = normalizeSignedDegrees(displayRoll - state.rollZeroDeg);
   state.altitudeMm = typeof state.tof[0] === "number" ? state.tof[0] : null;
   state.targetAltitudeY = altitudeToSceneY(state.altitudeMm);
   updateObstacleTargets();
@@ -968,7 +1062,7 @@ function applyReading(reading) {
   els.altitude.textContent = state.altitudeMm === null ? "--" : `${state.altitudeMm} mm`;
   updateAttitudeMeters();
   els.rawLine.textContent = state.lastLine;
-  els.fieldLine.textContent = `|B| ${mag.toFixed(1)} corrected units, mapped x=${Math.round(
+  els.fieldLine.textContent = `|B| ${mag.toFixed(1)} raw units, mapped x=${Math.round(
     state.mappedX,
   )} y=${Math.round(state.mappedY)}`;
   els.attitudeLine.textContent = reading.attitude?.present
@@ -978,6 +1072,7 @@ function applyReading(reading) {
     : "ADXL345 not detected";
   updateTofReadout();
   updateRcReadout();
+  updateOrientationLive();
   return true;
 }
 
@@ -1002,14 +1097,7 @@ function updateAttitudeMeters() {
 }
 
 function mapMagnetometerAxes(rawX, rawY) {
-  let x = rawX - state.hardIron.x;
-  let y = rawY - state.hardIron.y;
-  if (state.axisMap.swapXY) {
-    [x, y] = [y, x];
-  }
-  if (state.axisMap.invertX) x = -x;
-  if (state.axisMap.invertY) y = -y;
-  return { x, y };
+  return { x: rawX, y: rawY };
 }
 
 function headingFromAxes(x, y) {
@@ -1165,20 +1253,7 @@ function updateNorthOffsetLabel() {
     1,
   )} deg, pitch ${state.pitchZeroDeg.toFixed(1)}, roll ${state.rollZeroDeg.toFixed(
     1,
-  )}, field center x=${state.hardIron.x.toFixed(
-    0,
-  )} y=${state.hardIron.y.toFixed(0)}`;
-}
-
-function saveAxisMap() {
-  localStorage.setItem("gy271AxisMap", JSON.stringify(state.axisMap));
-}
-
-function syncAxisControls() {
-  els.swapXY.checked = state.axisMap.swapXY;
-  els.invertX.checked = state.axisMap.invertX;
-  els.invertY.checked = state.axisMap.invertY;
-  els.invertHeading.checked = state.axisMap.invertHeading;
+  )}`;
 }
 
 async function connectSerial() {
@@ -1261,36 +1336,63 @@ els.showRaw.addEventListener("click", () => els.rawDialog.showModal());
 els.closeRaw.addEventListener("click", () => els.rawDialog.close());
 els.showWiring.addEventListener("click", () => els.wiringDialog.showModal());
 els.closeWiring.addEventListener("click", () => els.wiringDialog.close());
-for (const dialog of [els.rawDialog, els.wiringDialog]) {
+els.showOrientationCal.addEventListener("click", () => {
+  updateOrientationLive();
+  updateOrientationResult();
+  els.orientationDialog.showModal();
+});
+els.closeOrientationCal.addEventListener("click", () => els.orientationDialog.close());
+for (const dialog of [els.rawDialog, els.wiringDialog, els.orientationDialog]) {
   dialog.addEventListener("click", (event) => {
     if (event.target === dialog) {
       dialog.close();
     }
   });
 }
+els.orientationSteps.addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-pose]");
+  if (!button) return;
+  state.orientationSamples[button.dataset.pose] = [state.ax, state.ay, state.az];
+  saveOrientationCalibration();
+  updateOrientationResult();
+  els.status.textContent = `Captured ${button.textContent.replace("Capture ", "").toLowerCase()}`;
+});
+els.applyOrientationCal.addEventListener("click", () => {
+  const map = buildOrientationMap(state.orientationSamples);
+  if (!map) {
+    els.status.textContent = "Capture all orientation positions first";
+    updateOrientationResult();
+    return;
+  }
+  state.orientationMap = map;
+  state.autoCalibrated = false;
+  saveOrientationCalibration();
+  updateOrientationResult();
+  if (state.lastLine) {
+    applyReading(parseSensorLine(state.lastLine));
+  }
+  els.status.textContent = "Applied ADXL orientation mapping";
+});
+els.resetOrientationCal.addEventListener("click", () => {
+  state.orientationMap = null;
+  state.orientationSamples = {};
+  state.autoCalibrated = false;
+  saveOrientationCalibration();
+  localStorage.removeItem("adxlOrientationSamples");
+  updateOrientationResult();
+  if (state.lastLine) {
+    applyReading(parseSensorLine(state.lastLine));
+  }
+  els.status.textContent = "Reset ADXL orientation mapping";
+});
 els.calibratePose.addEventListener("click", () => {
-  calibrateCurrentPose(state.rawPitch, state.rawRoll);
+  calibrateCurrentPose(state.pitch + state.pitchZeroDeg, state.roll + state.rollZeroDeg);
   updateNorthOffsetLabel();
   if (state.lastLine) {
     applyReading(parseSensorLine(state.lastLine));
   }
   els.status.textContent = "Calibrated current pose";
 });
-for (const [key, control] of [
-  ["swapXY", els.swapXY],
-  ["invertX", els.invertX],
-  ["invertY", els.invertY],
-  ["invertHeading", els.invertHeading],
-]) {
-  control.addEventListener("change", () => {
-    state.axisMap[key] = control.checked;
-    saveAxisMap();
-    if (state.lastLine) {
-      applyReading(parseSensorLine(state.lastLine));
-    }
-    els.status.textContent = "Axis mapping updated";
-  });
-}
 els.parseManual.addEventListener("click", () => {
   const line = els.manualLine.value.trim();
   els.demo.checked = false;
@@ -1415,8 +1517,8 @@ function updateTofBoundary(boundary, distance, direction, scale) {
 
 updateTargetQuaternion();
 updateNorthOffsetLabel();
-syncAxisControls();
 updateAttitudeMeters();
 updateRcReadout();
+updateOrientationResult();
 planeRig.userData.plane.quaternion.copy(state.targetQuaternion);
 animate();

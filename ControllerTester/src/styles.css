@@ -152,39 +152,6 @@ button.secondary,
   gap: 8px;
 }
 
-.axis-controls {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 7px;
-  padding: 9px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 8px;
-  background: rgba(0, 0, 0, 0.18);
-}
-
-.axis-controls > span {
-  grid-column: 1 / -1;
-  color: #8da0b4;
-  font-size: 12px;
-  text-transform: uppercase;
-}
-
-.axis-controls label {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  min-width: 0;
-  color: #cbd5e1;
-  font-size: 12px;
-}
-
-.axis-controls input {
-  width: 16px;
-  height: 16px;
-  margin: 0;
-  accent-color: #2fd39e;
-}
-
 .toggle {
   display: flex;
   align-items: center;
@@ -572,6 +539,25 @@ textarea {
 .debug-readout code {
   max-height: 220px;
   overflow: auto;
+}
+
+.orientation-map {
+  display: grid;
+  gap: 12px;
+}
+
+.orientation-steps {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.orientation-steps button:first-child {
+  grid-column: 1 / -1;
+}
+
+.orientation-map code {
+  white-space: pre-wrap;
 }
 
 .attitude-strip {
