@@ -472,6 +472,44 @@ code {
   color: #9fb0c3;
 }
 
+.pwm-grid,
+.pwm-wiring-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.pwm-grid div,
+.pwm-wiring-grid div {
+  min-width: 0;
+  padding: 7px 8px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.24);
+  border: 1px solid rgba(123, 199, 255, 0.2);
+}
+
+.pwm-grid span,
+.pwm-wiring-grid span {
+  display: block;
+  color: #8da0b4;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.pwm-grid strong,
+.pwm-wiring-grid strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #dbeafe;
+  font-size: 12px;
+}
+
+.pwm-wiring-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
 textarea {
   width: 100%;
   resize: vertical;
@@ -1162,6 +1200,10 @@ textarea {
   }
 
   .rc-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .pwm-wiring-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 

@@ -10,6 +10,24 @@ const DEFAULT_ORIENTATION_MAP = {
   right: [-0.05, -1.0, -0.03],
   level: [0.0, -0.12, -0.99],
 };
+const PWM_OUTPUT_LABELS = [
+  "Left front ESC",
+  "Left Front Mount",
+  "Right front ESC",
+  "Right front Mount",
+  "Left Rear ESC",
+  "Left Rear Mount",
+  "Right Rear ESC",
+  "Right Rear Mount",
+  "Elevator",
+  "Rudder",
+  "Landing Gear",
+  "Lights",
+  "Camera Pan",
+  "Camera Tilt",
+  "Spare",
+  "Spare",
+];
 
 function makeEmptyTofReadings() {
   return Object.fromEntries(TOF_CHANNELS.map((channel) => [channel, null]));
@@ -143,6 +161,14 @@ app.innerHTML = `
             <div data-tof="6"><span>Forward TOF5 / CH6</span><strong>--</strong><em>waiting</em></div>
           </div>
         </div>
+        <div>
+          <span>PCA9685 outputs</span>
+          <div class="pwm-grid" aria-label="PCA9685 channel labels">
+            ${PWM_OUTPUT_LABELS.map(
+              (label, index) => `<div><span>CH${index + 1}</span><strong>${label}</strong></div>`,
+            ).join("")}
+          </div>
+        </div>
       </div>
     </aside>
     <dialog id="wiring-dialog" class="modal">
@@ -150,7 +176,7 @@ app.innerHTML = `
         <div class="modal-title">
           <div>
             <span>Wiring diagram</span>
-            <strong>Pico -> HW-617 mux</strong>
+            <strong>Pico -> I2C sensors + PCA9685</strong>
           </div>
           <button id="close-wiring" type="button" class="icon-button" aria-label="Close wiring diagram">x</button>
         </div>
@@ -193,6 +219,21 @@ app.innerHTML = `
               <strong>Blue/purple LED = SBUS/PPM</strong>
               <em>Double-press ID SET within 1 second to toggle mode</em>
             </div>
+            <div class="direct-card">
+              <span>PCA9685 logic</span>
+              <strong>VCC -> Pico 3V3, GND -> common GND</strong>
+              <em>SDA/SCL share Pico GP0/GP1 I2C with the HW-617</em>
+            </div>
+            <div class="direct-card">
+              <span>PCA9685 servo rail</span>
+              <strong>V+ -> external 5-6V BEC</strong>
+              <em>Servos/ESC leads plug into the PCA9685 outputs; keep BEC ground common</em>
+            </div>
+          </div>
+          <div class="pwm-wiring-grid">
+            ${PWM_OUTPUT_LABELS.map(
+              (label, index) => `<div><span>PCA CH${index + 1}</span><strong>${label}</strong></div>`,
+            ).join("")}
           </div>
           <div class="mux-grid">
             <div><span>HW-617 CH0</span><strong>UL53LDK #0</strong><em>VIN/VCC, GND, SC0, SD0</em></div>
