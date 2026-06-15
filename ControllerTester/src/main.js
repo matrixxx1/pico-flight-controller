@@ -1081,10 +1081,33 @@ function applyReading(reading) {
         2,
       )}g pitch=${state.pitch.toFixed(1)} roll=${state.roll.toFixed(1)}`
     : "ADXL345 not detected";
+  if (state.sensor === "Receiver / waiting") {
+    els.status.textContent = "Pico is sending data; I2C sensors are not detected";
+  } else {
+    els.status.textContent = `Reading ${state.sensor}`;
+  }
   updateTofReadout();
   updateRcReadout();
   updateOrientationLive();
   return true;
+}
+
+function handleDiagnosticLine(line) {
+  if (line.includes("I2C bus held low")) {
+    els.status.textContent = line;
+    els.sensor.textContent = "I2C bus fault";
+    return true;
+  }
+  if (line.includes("No HW-617/TCA9548A detected")) {
+    els.status.textContent = "HW-617 mux not detected";
+    els.sensor.textContent = "Mux missing";
+    return true;
+  }
+  if (line.includes("Root I2C devices:")) {
+    els.status.textContent = line;
+    return true;
+  }
+  return false;
 }
 
 function updateAttitudeMeters() {
@@ -1313,6 +1336,8 @@ async function readSerialLoop() {
         const reading = parseSensorLine(line);
         if (reading) {
           applyReading(reading);
+        } else if (handleDiagnosticLine(trimmed)) {
+          continue;
         } else {
           els.status.textContent = `Serial text: ${trimmed.slice(0, 64)}`;
         }
