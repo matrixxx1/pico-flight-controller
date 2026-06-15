@@ -1170,11 +1170,11 @@ function updateTofReadout() {
     } else if (value === "None") {
       valueEl.textContent = "not found";
       statusEl.textContent = "not detected";
-      cells[index].classList.add("range-missing");
+      cell.classList.add("range-missing");
     } else if (value === "err") {
       valueEl.textContent = "error";
       statusEl.textContent = "read failed";
-      cells[index].classList.add("range-error");
+      cell.classList.add("range-error");
     } else {
       valueEl.textContent = `${value} mm`;
       const status = classifyTofRange(value);
@@ -1333,13 +1333,17 @@ async function readSerialLoop() {
         const trimmed = line.trim();
         if (!trimmed) continue;
         els.rawLine.textContent = trimmed;
-        const reading = parseSensorLine(line);
-        if (reading) {
-          applyReading(reading);
-        } else if (handleDiagnosticLine(trimmed)) {
-          continue;
-        } else {
-          els.status.textContent = `Serial text: ${trimmed.slice(0, 64)}`;
+        try {
+          const reading = parseSensorLine(line);
+          if (reading) {
+            applyReading(reading);
+          } else if (handleDiagnosticLine(trimmed)) {
+            continue;
+          } else {
+            els.status.textContent = `Serial text: ${trimmed.slice(0, 64)}`;
+          }
+        } catch (error) {
+          els.status.textContent = `Display error: ${error.message}`;
         }
       }
     }
