@@ -3,6 +3,13 @@ import "./styles.css";
 
 const app = document.querySelector("#app");
 const TOF_CHANNELS = [0, 1, 2, 3, 6];
+const ORIENTATION_MAP_VERSION = 2;
+const DEFAULT_ORIENTATION_MAP = {
+  version: ORIENTATION_MAP_VERSION,
+  forward: [0.99, -0.03, 0.1],
+  right: [-0.05, -1.0, -0.03],
+  level: [0.0, -0.12, -0.99],
+};
 
 function makeEmptyTofReadings() {
   return Object.fromEntries(TOF_CHANNELS.map((channel) => [channel, null]));
@@ -295,6 +302,10 @@ const els = {
 
 const savedOrientationMap = JSON.parse(localStorage.getItem("adxlOrientationMap") ?? "null");
 const savedOrientationSamples = JSON.parse(localStorage.getItem("adxlOrientationSamples") ?? "{}");
+const activeOrientationMap =
+  isValidOrientationMap(savedOrientationMap) && savedOrientationMap.version === ORIENTATION_MAP_VERSION
+    ? savedOrientationMap
+    : DEFAULT_ORIENTATION_MAP;
 
 const state = {
   x: 0,
@@ -315,7 +326,7 @@ const state = {
   pitchZeroDeg: 0,
   rollZeroDeg: 0,
   autoCalibrated: false,
-  orientationMap: isValidOrientationMap(savedOrientationMap) ? savedOrientationMap : null,
+  orientationMap: activeOrientationMap,
   orientationSamples: savedOrientationSamples && typeof savedOrientationSamples === "object" ? savedOrientationSamples : {},
   sensor: "Disconnected",
   connected: false,
@@ -976,8 +987,8 @@ function calculateMappedAttitude(ax, ay, az) {
   const right = dotVector(raw, state.orientationMap.right);
   const level = dotVector(raw, state.orientationMap.level);
   return {
-    pitch: THREE.MathUtils.radToDeg(Math.atan2(right, Math.sqrt(forward * forward + level * level))),
-    roll: -THREE.MathUtils.radToDeg(Math.atan2(forward, Math.abs(level))),
+    pitch: -THREE.MathUtils.radToDeg(Math.atan2(right, Math.sqrt(forward * forward + level * level))),
+    roll: THREE.MathUtils.radToDeg(Math.atan2(forward, Math.abs(level))),
   };
 }
 
@@ -988,7 +999,7 @@ function buildOrientationMap(samples) {
   const right = normalizeVector(subtractVectors(samples.rightDown, samples.leftDown));
   const level = normalizeVector(samples.level);
   if (!forward || !right || !level) return null;
-  return { forward, right, level };
+  return { version: ORIENTATION_MAP_VERSION, forward, right, level };
 }
 
 function saveOrientationCalibration() {
@@ -1416,7 +1427,7 @@ els.applyOrientationCal.addEventListener("click", () => {
   els.status.textContent = "Applied ADXL orientation mapping";
 });
 els.resetOrientationCal.addEventListener("click", () => {
-  state.orientationMap = null;
+  state.orientationMap = DEFAULT_ORIENTATION_MAP;
   state.orientationSamples = {};
   state.autoCalibrated = false;
   saveOrientationCalibration();
