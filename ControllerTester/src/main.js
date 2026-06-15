@@ -965,8 +965,8 @@ function calculateMappedAttitude(ax, ay, az) {
   const right = dotVector(raw, state.orientationMap.right);
   const level = dotVector(raw, state.orientationMap.level);
   return {
-    pitch: THREE.MathUtils.radToDeg(Math.atan2(forward, Math.sqrt(right * right + level * level))),
-    roll: THREE.MathUtils.radToDeg(Math.atan2(right, Math.abs(level))),
+    pitch: THREE.MathUtils.radToDeg(Math.atan2(right, Math.sqrt(forward * forward + level * level))),
+    roll: THREE.MathUtils.radToDeg(Math.atan2(forward, Math.abs(level))),
   };
 }
 
