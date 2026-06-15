@@ -16,7 +16,7 @@ Raspberry Pi Pico receiver and sensor testbed for a flight-controller-style buil
 - Radiolink R8EF receiver, powered from the Pico `3V3` rail for bench testing.
 - Radiolink transmitter bound to the R8EF.
 - HW-617 / TCA9548A I2C multiplexer.
-- Four UL53LDK / VL53L0X time-of-flight distance sensors.
+- Five UL53LDK / VL53L0X time-of-flight distance sensors.
 - GY-271 compass module with QMC5883P / HP5883 magnetometer.
 - ADXL345 accelerometer module.
 - USB cable from the Pico to the Windows laptop.
@@ -50,6 +50,7 @@ HW-617 CH2: SC2/SCL + SD2/SDA ------- UL53LDK / VL53L0X #2
 HW-617 CH3: SC3/SCL + SD3/SDA ------- UL53LDK / VL53L0X #3
 HW-617 CH4: SC4/SCL + SD4/SDA ------- GY-271 compass
 HW-617 CH5: SC5/SCL + SD5/SDA ------- ADXL345 accelerometer
+HW-617 CH6: SC6/SCL + SD6/SDA ------- Forward UL53LDK / VL53L0X
 ```
 
 ## Wiring Table
@@ -69,6 +70,7 @@ HW-617 CH5: SC5/SCL + SD5/SDA ------- ADXL345 accelerometer
 | UL53LDK #3 | SDA/SCL | HW-617 `SD3` / `SC3` | VL53L0X distance sensor. |
 | GY-271 | SDA/SCL | HW-617 `SD4` / `SC4` | Compass / magnetometer. |
 | ADXL345 | SDA/SCL | HW-617 `SD5` / `SC5` | Accelerometer. |
+| Forward UL53LDK | SDA/SCL | HW-617 `SD6` / `SC6` | Forward-looking VL53L0X distance sensor. |
 | All I2C sensors | VCC / VIN | Pico `3V3` rail | Use 3.3V-compatible modules. |
 | All I2C sensors | GND | Pico `GND` rail | Shared ground. |
 

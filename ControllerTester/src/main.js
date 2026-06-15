@@ -2,6 +2,11 @@ import * as THREE from "three";
 import "./styles.css";
 
 const app = document.querySelector("#app");
+const TOF_CHANNELS = [0, 1, 2, 3, 6];
+
+function makeEmptyTofReadings() {
+  return Object.fromEntries(TOF_CHANNELS.map((channel) => [channel, null]));
+}
 
 app.innerHTML = `
   <main class="shell">
@@ -124,10 +129,11 @@ app.innerHTML = `
           <span>Distance sensors</span>
           <p class="range-guide">VL53L0X: best 50-1000 mm, extended 1000-2000 mm.</p>
           <div id="range-line" class="range-grid">
-            <div><span>TOF0</span><strong>--</strong><em>waiting</em></div>
-            <div><span>Top / TOF1</span><strong>--</strong><em>waiting</em></div>
-            <div><span>Right / TOF2</span><strong>--</strong><em>waiting</em></div>
-            <div><span>Left / TOF3</span><strong>--</strong><em>waiting</em></div>
+            <div data-tof="0"><span>TOF0</span><strong>--</strong><em>waiting</em></div>
+            <div data-tof="1"><span>Top / TOF1</span><strong>--</strong><em>waiting</em></div>
+            <div data-tof="2"><span>Right / TOF2</span><strong>--</strong><em>waiting</em></div>
+            <div data-tof="3"><span>Left / TOF3</span><strong>--</strong><em>waiting</em></div>
+            <div data-tof="6"><span>Forward / TOF6</span><strong>--</strong><em>waiting</em></div>
           </div>
         </div>
       </div>
@@ -188,6 +194,7 @@ app.innerHTML = `
             <div><span>HW-617 CH3</span><strong>UL53LDK #3</strong><em>VIN/VCC, GND, SC3, SD3</em></div>
             <div class="mag-channel"><span>HW-617 CH4</span><strong>GY-271 compass</strong><em>VCC, GND, SC4/SCL, SD4/SDA</em></div>
             <div class="mag-channel"><span>HW-617 CH5</span><strong>ADXL345 accelerometer</strong><em>VCC, GND, SC5/SCL, SD5/SDA</em></div>
+            <div><span>HW-617 CH6</span><strong>Forward UL53LDK</strong><em>VIN/VCC, GND, SC6/SCL, SD6/SDA</em></div>
           </div>
         </section>
       </div>
@@ -326,8 +333,9 @@ const state = {
     top: null,
     right: null,
     left: null,
+    forward: null,
   },
-  tof: [null, null, null, null],
+  tof: makeEmptyTofReadings(),
   rc: [null, null, null, null, null, null, null, null],
 };
 
@@ -408,6 +416,7 @@ function makePlaneRig() {
     top: makeTofBoundary(0xffd166, "Ceiling / TOF1"),
     right: makeTofBoundary(0x7bc7ff, "Right wall / TOF2"),
     left: makeTofBoundary(0xff8b90, "Left wall / TOF3"),
+    forward: makeTofBoundary(0x2fd39e, "Forward / TOF6"),
   };
   for (const obstacle of Object.values(obstacles)) {
     group.add(obstacle);
@@ -898,10 +907,12 @@ function parseSensorLine(line) {
 }
 
 function parseTofFields(line) {
-  const distances = [null, null, null, null];
-  for (const match of line.matchAll(/tof([0-3])=(\d+|None|err)/g)) {
+  const distances = makeEmptyTofReadings();
+  for (const match of line.matchAll(/tof(\d+)=(\d+|None|err)/g)) {
     const index = Number(match[1]);
-    distances[index] = /^\d+$/.test(match[2]) ? Number(match[2]) : match[2];
+    if (TOF_CHANNELS.includes(index)) {
+      distances[index] = /^\d+$/.test(match[2]) ? Number(match[2]) : match[2];
+    }
   }
   return distances;
 }
@@ -1027,7 +1038,7 @@ function applyReading(reading) {
   state.mappedX = mapped.x;
   state.mappedY = mapped.y;
   state.heading = headingFromAxes(mapped.x, mapped.y);
-  state.tof = reading.tof ?? [null, null, null, null];
+  state.tof = reading.tof ?? makeEmptyTofReadings();
   state.rc = reading.rc ?? [null, null, null, null, null, null, null, null];
   state.ax = reading.attitude?.ax ?? 0;
   state.ay = reading.attitude?.ay ?? 0;
@@ -1120,14 +1131,16 @@ function updateObstacleTargets() {
   state.obstacleTargets.top = tofToSceneDistance(state.tof[1]);
   state.obstacleTargets.right = tofToSceneDistance(state.tof[2]);
   state.obstacleTargets.left = tofToSceneDistance(state.tof[3]);
+  state.obstacleTargets.forward = tofToSceneDistance(state.tof[6]);
 }
 
 function updateTofReadout() {
-  const cells = [...els.rangeLine.querySelectorAll("div")];
-  state.tof.forEach((value, index) => {
-    const valueEl = cells[index].querySelector("strong");
-    const statusEl = cells[index].querySelector("em");
-    cells[index].className = "";
+  const cells = [...els.rangeLine.querySelectorAll("[data-tof]")];
+  for (const cell of cells) {
+    const value = state.tof[Number(cell.dataset.tof)];
+    const valueEl = cell.querySelector("strong");
+    const statusEl = cell.querySelector("em");
+    cell.className = "";
     if (value === null || value === undefined) {
       valueEl.textContent = "--";
       statusEl.textContent = "waiting";
@@ -1143,9 +1156,9 @@ function updateTofReadout() {
       valueEl.textContent = `${value} mm`;
       const status = classifyTofRange(value);
       statusEl.textContent = status.label;
-      cells[index].classList.add(status.className);
+      cell.classList.add(status.className);
     }
-  });
+  }
 }
 
 function classifyTofRange(value) {
@@ -1425,6 +1438,9 @@ function runDemo(time) {
       Math.round(520 + Math.sin(t * 0.7 + 1) * 140),
       Math.round(650 + Math.sin(t * 0.9 + 2) * 210),
       Math.round(780 + Math.sin(t * 0.4 + 3) * 260),
+      null,
+      null,
+      Math.round(700 + Math.sin(t * 0.8 + 4) * 240),
     ],
     rc: demoRcChannels(t),
     raw: `sensor=Demo motion x=${Math.round(Math.cos(t) * 420)} y=${Math.round(
@@ -1433,7 +1449,9 @@ function runDemo(time) {
       420 + Math.sin(t) * 170,
     )} tof1=${Math.round(520 + Math.sin(t * 0.7 + 1) * 140)} tof2=${Math.round(
       650 + Math.sin(t * 0.9 + 2) * 210,
-    )} tof3=${Math.round(780 + Math.sin(t * 0.4 + 3) * 260)} ax=${(
+    )} tof3=${Math.round(780 + Math.sin(t * 0.4 + 3) * 260)} tof6=${Math.round(
+      700 + Math.sin(t * 0.8 + 4) * 240,
+    )} ax=${(
       Math.sin(t * 0.65) * 0.45
     ).toFixed(3)} ay=${(Math.sin(t * 0.9) * 0.5).toFixed(3)} az=0.920 pitch=${(
       Math.sin(t * 0.65) * 22
@@ -1489,6 +1507,12 @@ function animate(time = 0) {
     state.obstacleTargets.left,
     new THREE.Vector3(-1, 0, 0),
     new THREE.Vector3(0.08, 3.5, 7),
+  );
+  updateTofBoundary(
+    planeRig.userData.obstacles.forward,
+    state.obstacleTargets.forward,
+    new THREE.Vector3(0, 0, -1),
+    new THREE.Vector3(5.4, 3.5, 0.08),
   );
 
   renderer.render(scene, camera);
