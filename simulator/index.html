@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Pico Setup Simulator</title>
+    <link rel="stylesheet" href="src/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="viewport" aria-label="Simulated flight setup">
+        <div class="scene">
+          <div class="skyline">
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+          <div id="craft" class="craft" aria-hidden="true">
+            <i class="wing left-wing"></i>
+            <i class="body"></i>
+            <i class="wing right-wing"></i>
+            <i class="nose"></i>
+          </div>
+          <div id="drift-vector" class="drift-vector" aria-hidden="true"></div>
+          <div class="range top-range"><span>TOF1</span><strong id="tof1">--</strong></div>
+          <div class="range right-range"><span>TOF2</span><strong id="tof2">--</strong></div>
+          <div class="range left-range"><span>TOF3</span><strong id="tof3">--</strong></div>
+          <div class="range forward-range"><span>TOF6</span><strong id="tof6">--</strong></div>
+          <div class="range ground-range"><span>TOF0</span><strong id="tof0">--</strong></div>
+        </div>
+        <div class="telemetry">
+          <div><span>Heading</span><strong id="heading">0.0 deg</strong></div>
+          <div><span>Pitch</span><strong id="pitch">0.0 deg</strong></div>
+          <div><span>Roll</span><strong id="roll">0.0 deg</strong></div>
+          <div><span>Drift</span><strong id="drift">0.0</strong></div>
+        </div>
+      </section>
+
+      <aside class="panel">
+        <header>
+          <div class="mark"></div>
+          <div>
+            <h1>Pico Setup Simulator</h1>
+            <p id="status">Ready</p>
+          </div>
+        </header>
+
+        <section class="controls" aria-label="Simulation controls">
+          <label>
+            Scenario
+            <select id="scenario">
+              <option value="manual">Manual controls</option>
+              <option value="drift">Mimic wind drift</option>
+              <option value="rc">Mimic RC instruction</option>
+              <option value="fault">Sensor fault</option>
+              <option value="landing">Low-altitude approach</option>
+            </select>
+          </label>
+
+          <div class="button-row">
+            <button id="play" type="button">Pause</button>
+            <button id="step" type="button" class="secondary">Step</button>
+            <button id="reset" type="button" class="secondary">Reset</button>
+          </div>
+
+          <div class="slider-grid">
+            <label>Throttle <input id="throttle" type="range" min="1000" max="2000" value="1500" /></label>
+            <label>Yaw / CH1 <input id="yaw" type="range" min="1000" max="2000" value="1500" /></label>
+            <label>Pitch / CH2 <input id="pitch-control" type="range" min="1000" max="2000" value="1500" /></label>
+            <label>Roll / CH4 <input id="roll-control" type="range" min="1000" max="2000" value="1500" /></label>
+            <label>Wind drift <input id="wind" type="range" min="-100" max="100" value="0" /></label>
+          </div>
+
+          <div class="switch-grid">
+            <label><input id="tof-fault" type="checkbox" /> TOF read errors</label>
+            <label><input id="mag-fault" type="checkbox" /> Compass timeout</label>
+            <label><input id="rc-stale" type="checkbox" /> RC stale / no pulse</label>
+          </div>
+
+          <div class="controller-box">
+            <div class="readout-title">
+              <span>USB Controller</span>
+              <button id="use-gamepad" type="button" class="secondary">Use T8FB</button>
+            </div>
+            <code id="gamepad-status">Press Use T8FB, then move a stick or press a transmitter button.</code>
+          </div>
+
+          <div class="controller-box">
+            <div class="readout-title">
+              <span>Serial COM Input</span>
+              <div class="mini-actions">
+                <button id="reconnect-serial" type="button" class="secondary">Apply Baud</button>
+                <button id="connect-serial" type="button" class="secondary">Connect COM4</button>
+              </div>
+            </div>
+            <label>
+              Baud
+              <select id="serial-baud">
+                <option value="115200">115200</option>
+                <option value="9600">9600</option>
+                <option value="57600">57600</option>
+                <option value="100000">100000 SBUS 8E2</option>
+              </select>
+            </label>
+            <div class="baud-buttons" aria-label="Baud presets">
+              <button type="button" class="secondary baud-preset active" data-baud="115200">115200</button>
+              <button type="button" class="secondary baud-preset" data-baud="9600">9600</button>
+              <button type="button" class="secondary baud-preset" data-baud="57600">57600</button>
+              <button type="button" class="secondary baud-preset" data-baud="100000">SBUS</button>
+            </div>
+            <code id="serial-status">Pick the CH340 / COM4 port when the browser asks.</code>
+          </div>
+        </section>
+
+        <section class="readout" aria-label="Generated Pico output">
+          <div class="readout-title">
+            <span>Generated serial line</span>
+            <button id="copy-line" type="button" class="secondary">Copy</button>
+          </div>
+          <code id="serial-line"></code>
+          <textarea id="script" rows="7" spellcheck="false" aria-label="Instruction script"></textarea>
+          <div class="button-row">
+            <button id="run-script" type="button">Run Script</button>
+            <button id="load-example" type="button" class="secondary">Example</button>
+          </div>
+        </section>
+      </aside>
+    </main>
+    <script type="module" src="src/main.js"></script>
+  </body>
+</html>

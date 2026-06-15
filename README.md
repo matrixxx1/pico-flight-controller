@@ -7,6 +7,7 @@ Raspberry Pi Pico receiver and sensor testbed for a flight-controller-style buil
 - `main.py` - MicroPython firmware currently focused on reading an R8EF receiver PPM signal on Pico `GP15`.
 - `vl53l0x.py` - VL53L0X / UL53LDK distance sensor driver used by earlier sensor builds.
 - `ControllerTester/` - Vite + Three.js browser dashboard for Web Serial display of receiver and sensor readings.
+- `simulator/` - Local browser simulator that generates Pico-shaped serial lines for drift, RC input, and fault testing.
 - `QMC5883P.pdf` - Compass sensor reference sheet.
 - `RPI_PICO-20260406-v1.28.0.uf2` - MicroPython UF2 used for Pico setup.
 
@@ -134,3 +135,12 @@ npm run dev -- --port 5173
 ```
 
 Then open `http://127.0.0.1:5173` in Chrome or Edge and connect to the Pico over Web Serial.
+
+## Simulator
+
+```powershell
+cd simulator
+.\Start-Simulator.ps1
+```
+
+Then open the URL printed by the launcher, starting with `http://127.0.0.1:5174`. The simulator can copy generated serial lines into the `ControllerTester` raw/manual parser, run short RC instruction scripts, read a USB transmitter/game-controller through the browser Gamepad API, and read CH340-style serial adapters through Web Serial.
