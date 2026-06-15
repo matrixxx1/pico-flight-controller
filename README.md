@@ -50,7 +50,7 @@ HW-617 CH2: SC2/SCL + SD2/SDA ------- UL53LDK / VL53L0X #2
 HW-617 CH3: SC3/SCL + SD3/SDA ------- UL53LDK / VL53L0X #3
 HW-617 CH4: SC4/SCL + SD4/SDA ------- GY-271 compass
 HW-617 CH5: SC5/SCL + SD5/SDA ------- ADXL345 accelerometer
-HW-617 CH6: SC6/SCL + SD6/SDA ------- Forward UL53LDK / VL53L0X
+HW-617 CH6: SC6/SCL + SD6/SDA ------- Forward TOF5 / UL53LDK / VL53L0X
 ```
 
 ## Wiring Table
@@ -70,7 +70,7 @@ HW-617 CH6: SC6/SCL + SD6/SDA ------- Forward UL53LDK / VL53L0X
 | UL53LDK #3 | SDA/SCL | HW-617 `SD3` / `SC3` | VL53L0X distance sensor. |
 | GY-271 | SDA/SCL | HW-617 `SD4` / `SC4` | Compass / magnetometer. |
 | ADXL345 | SDA/SCL | HW-617 `SD5` / `SC5` | Accelerometer. |
-| Forward UL53LDK | SDA/SCL | HW-617 `SD6` / `SC6` | Forward-looking VL53L0X distance sensor. |
+| Forward TOF5 / UL53LDK | SDA/SCL | HW-617 `SD6` / `SC6` | Fifth physical TOF sensor, connected on mux channel 6. |
 | All I2C sensors | VCC / VIN | Pico `3V3` rail | Use 3.3V-compatible modules. |
 | All I2C sensors | GND | Pico `GND` rail | Shared ground. |
 

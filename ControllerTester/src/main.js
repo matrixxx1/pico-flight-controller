@@ -133,7 +133,7 @@ app.innerHTML = `
             <div data-tof="1"><span>Top / TOF1</span><strong>--</strong><em>waiting</em></div>
             <div data-tof="2"><span>Right / TOF2</span><strong>--</strong><em>waiting</em></div>
             <div data-tof="3"><span>Left / TOF3</span><strong>--</strong><em>waiting</em></div>
-            <div data-tof="6"><span>Forward / TOF6</span><strong>--</strong><em>waiting</em></div>
+            <div data-tof="6"><span>Forward TOF5 / CH6</span><strong>--</strong><em>waiting</em></div>
           </div>
         </div>
       </div>
@@ -194,7 +194,7 @@ app.innerHTML = `
             <div><span>HW-617 CH3</span><strong>UL53LDK #3</strong><em>VIN/VCC, GND, SC3, SD3</em></div>
             <div class="mag-channel"><span>HW-617 CH4</span><strong>GY-271 compass</strong><em>VCC, GND, SC4/SCL, SD4/SDA</em></div>
             <div class="mag-channel"><span>HW-617 CH5</span><strong>ADXL345 accelerometer</strong><em>VCC, GND, SC5/SCL, SD5/SDA</em></div>
-            <div><span>HW-617 CH6</span><strong>Forward UL53LDK</strong><em>VIN/VCC, GND, SC6/SCL, SD6/SDA</em></div>
+            <div><span>HW-617 CH6</span><strong>Forward TOF5</strong><em>VIN/VCC, GND, SC6/SCL, SD6/SDA</em></div>
           </div>
         </section>
       </div>
@@ -416,7 +416,7 @@ function makePlaneRig() {
     top: makeTofBoundary(0xffd166, "Ceiling / TOF1"),
     right: makeTofBoundary(0x7bc7ff, "Right wall / TOF2"),
     left: makeTofBoundary(0xff8b90, "Left wall / TOF3"),
-    forward: makeTofBoundary(0x2fd39e, "Forward / TOF6"),
+    forward: makeTofBoundary(0x2fd39e, "Forward TOF5 / CH6"),
   };
   for (const obstacle of Object.values(obstacles)) {
     group.add(obstacle);
