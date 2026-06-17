@@ -985,6 +985,51 @@ textarea {
   font-size: 12px;
 }
 
+.flight-mode-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 3px 8px;
+  margin-bottom: 8px;
+  padding: 8px 9px;
+  border: 1px solid rgba(47, 211, 158, 0.36);
+  border-radius: 8px;
+  background: rgba(47, 211, 158, 0.12);
+}
+
+.flight-mode-card span {
+  grid-column: 1 / -1;
+  color: #8da0b4;
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.flight-mode-card strong {
+  overflow: hidden;
+  color: #f1f5f9;
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.flight-mode-card em {
+  color: #d6f7ea;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.flight-mode-card[data-flight-mode="flightmode2"] {
+  border-color: rgba(255, 207, 90, 0.44);
+  background: rgba(255, 207, 90, 0.13);
+}
+
+.flight-mode-card[data-flight-mode="flightmode3"] {
+  border-color: rgba(123, 199, 255, 0.42);
+  background: rgba(123, 199, 255, 0.14);
+}
+
 .rc-list {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1074,6 +1119,7 @@ textarea {
 }
 
 .rc-channel[data-mode="switch"] strong,
+.rc-channel[data-mode="flight"] strong,
 .rc-channel[data-mode="three"] strong {
   color: #d6f7ea;
   font-size: 10px;

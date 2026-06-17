@@ -87,13 +87,18 @@ app.innerHTML = `
             <span>R8EF</span>
             <strong>PPM GP15</strong>
           </div>
+          <div id="flight-mode-card" class="flight-mode-card" data-flight-mode="flightmode1">
+            <span>Flight Mode</span>
+            <strong>Mode 1</strong>
+            <em>Plane</em>
+          </div>
           <div id="rc-line" class="rc-list">
             <div class="rc-channel rc-vertical" data-channel="3"><span>LSV</span><i><b></b></i><strong>--</strong><em>CH3</em></div>
             <div class="rc-channel rc-vertical" data-channel="2"><span>RSV</span><i><b></b></i><strong>--</strong><em>CH2</em></div>
             <div class="rc-channel" data-channel="4"><span>LSH</span><i><b></b></i><strong>--</strong><em>CH4</em></div>
             <div class="rc-channel" data-channel="1"><span>RSH</span><i><b></b></i><strong>--</strong><em>CH1</em></div>
-            <div class="rc-channel" data-channel="7" data-mode="switch"><span>CH7</span><i><b></b></i><strong>--</strong><em>ON/OFF</em></div>
-            <div class="rc-channel" data-channel="5" data-mode="three"><span>CH5</span><i><b></b></i><strong>--</strong><em>TOP/MID/BOT</em></div>
+            <div class="rc-channel" data-channel="7" data-mode="switch"><span>CH7</span><i><b></b></i><strong>--</strong><em>LIGHTS</em></div>
+            <div class="rc-channel" data-channel="5" data-mode="flight"><span>CH5</span><i><b></b></i><strong>--</strong><em>MODE</em></div>
             <div class="rc-channel rc-arc rc-arc-left" data-channel="8" data-mode="arc-left"><span>CH8</span><i><b></b></i><strong>--</strong><em>LEFT -> TOP</em></div>
             <div class="rc-channel rc-arc rc-arc-right" data-channel="6" data-mode="arc-right"><span>CH6</span><i><b></b></i><strong>--</strong><em>BOTTOM -> TOP</em></div>
           </div>
@@ -102,6 +107,10 @@ app.innerHTML = `
           <div>
             <span class="label">Heading</span>
             <strong id="heading">--.- deg</strong>
+          </div>
+          <div>
+            <span class="label">Mode</span>
+            <strong id="flight-mode">Mode 1 / Plane</strong>
           </div>
           <div>
             <span class="label">Sensor</span>
@@ -147,7 +156,7 @@ app.innerHTML = `
           <code id="field-line">--</code>
         </div>
         <div>
-          <span>ADXL345 attitude</span>
+          <span>IMU attitude</span>
           <code id="attitude-line">--</code>
         </div>
         <div>
@@ -176,7 +185,7 @@ app.innerHTML = `
         <div class="modal-title">
           <div>
             <span>Wiring diagram</span>
-            <strong>Pico -> I2C sensors + PCA9685</strong>
+            <strong>Pico -> HW-617 -> sensors + PCA9685</strong>
           </div>
           <button id="close-wiring" type="button" class="icon-button" aria-label="Close wiring diagram">x</button>
         </div>
@@ -222,7 +231,7 @@ app.innerHTML = `
             <div class="direct-card">
               <span>PCA9685 logic</span>
               <strong>VCC -> Pico 3V3, GND -> common GND</strong>
-              <em>SDA/SCL share Pico GP0/GP1 I2C with the HW-617</em>
+              <em>SDA -> HW-617 SD7, SCL -> HW-617 SC7</em>
             </div>
             <div class="direct-card">
               <span>PCA9685 servo rail</span>
@@ -241,8 +250,9 @@ app.innerHTML = `
             <div><span>HW-617 CH2</span><strong>UL53LDK #2</strong><em>VIN/VCC, GND, SC2, SD2</em></div>
             <div><span>HW-617 CH3</span><strong>UL53LDK #3</strong><em>VIN/VCC, GND, SC3, SD3</em></div>
             <div class="mag-channel"><span>HW-617 CH4</span><strong>GY-271 compass</strong><em>VCC, GND, SC4/SCL, SD4/SDA</em></div>
-            <div class="mag-channel"><span>HW-617 CH5</span><strong>ADXL345 accelerometer</strong><em>VCC, GND, SC5/SCL, SD5/SDA</em></div>
+            <div class="mag-channel"><span>HW-617 CH5</span><strong>MPU-6050 IMU</strong><em>VCC, GND, SC5/SCL, SD5/SDA</em></div>
             <div><span>HW-617 CH6</span><strong>Forward TOF5</strong><em>VIN/VCC, GND, SC6/SCL, SD6/SDA</em></div>
+            <div class="mag-channel"><span>HW-617 CH7</span><strong>PCA9685 PWM driver</strong><em>VCC, GND, SC7/SCL, SD7/SDA</em></div>
           </div>
         </section>
       </div>
@@ -301,6 +311,7 @@ app.innerHTML = `
 const els = {
   canvas: document.querySelector("#scene"),
   heading: document.querySelector("#heading"),
+  flightMode: document.querySelector("#flight-mode"),
   sensor: document.querySelector("#sensor"),
   status: document.querySelector("#status"),
   pitch: document.querySelector("#pitch-value"),
@@ -318,6 +329,7 @@ const els = {
   attitudeLine: document.querySelector("#attitude-line"),
   rangeLine: document.querySelector("#range-line"),
   rcLine: document.querySelector("#rc-line"),
+  flightModeCard: document.querySelector("#flight-mode-card"),
   connect: document.querySelector("#connect"),
   disconnect: document.querySelector("#disconnect"),
   calibratePose: document.querySelector("#calibrate-pose"),
@@ -389,6 +401,8 @@ const state = {
   },
   tof: makeEmptyTofReadings(),
   rc: [null, null, null, null, null, null, null, null],
+  flightMode: "flightmode1",
+  flightLabel: "Plane",
 };
 
 const renderer = new THREE.WebGLRenderer({
@@ -945,6 +959,9 @@ function parseSensorLine(line) {
   );
   if (!match?.groups) return null;
 
+  const rc = parseRcFields(line);
+  const flight = parseFlightModeFields(line, rc);
+
   return {
     sensor: match.groups.sensor.trim(),
     x: Number(match.groups.x),
@@ -953,7 +970,9 @@ function parseSensorLine(line) {
     heading: Number(match.groups.heading),
     tof: parseTofFields(line),
     attitude: parseAttitudeFields(line),
-    rc: parseRcFields(line),
+    rc,
+    flightMode: flight.mode,
+    flightLabel: flight.label,
     raw: line.trim(),
   };
 }
@@ -993,6 +1012,31 @@ function parseRcFields(line) {
     channels[index] = /^\d+$/.test(match[2]) ? Number(match[2]) : match[2];
   }
   return channels;
+}
+
+function parseFlightModeFields(line, rc) {
+  const modeMatch = line.match(/\bflightmode=(flightmode[123])\b/);
+  if (modeMatch) {
+    return {
+      mode: modeMatch[1],
+      label: flightModeLabel(modeMatch[1]),
+    };
+  }
+  const rc5 = rc[4];
+  if (typeof rc5 === "number" && Number.isFinite(rc5)) {
+    const mode = rc5 < 1300 ? "flightmode1" : rc5 > 1700 ? "flightmode3" : "flightmode2";
+    return {
+      mode,
+      label: flightModeLabel(mode),
+    };
+  }
+  return { mode: "flightmode1", label: "Plane" };
+}
+
+function flightModeLabel(mode) {
+  if (mode === "flightmode3") return "Hover";
+  if (mode === "flightmode2") return "Transition";
+  return "Plane";
 }
 
 function isValidOrientationMap(map) {
@@ -1092,6 +1136,8 @@ function applyReading(reading) {
   state.heading = headingFromAxes(mapped.x, mapped.y);
   state.tof = reading.tof ?? makeEmptyTofReadings();
   state.rc = reading.rc ?? [null, null, null, null, null, null, null, null];
+  state.flightMode = reading.flightMode ?? "flightmode1";
+  state.flightLabel = reading.flightLabel ?? flightModeLabel(state.flightMode);
   state.ax = reading.attitude?.ax ?? 0;
   state.ay = reading.attitude?.ay ?? 0;
   state.az = reading.attitude?.az ?? 0;
@@ -1132,16 +1178,27 @@ function applyReading(reading) {
     ? `ax=${state.ax.toFixed(2)}g ay=${state.ay.toFixed(2)}g az=${state.az.toFixed(
         2,
       )}g pitch=${state.pitch.toFixed(1)} roll=${state.roll.toFixed(1)}`
-    : "ADXL345 not detected";
+    : "IMU not detected";
   if (state.sensor === "Receiver / waiting") {
     els.status.textContent = "Pico is sending data; I2C sensors are not detected";
   } else {
     els.status.textContent = `Reading ${state.sensor}`;
   }
   updateTofReadout();
+  updateFlightModeReadout();
   updateRcReadout();
   updateOrientationLive();
   return true;
+}
+
+function updateFlightModeReadout() {
+  els.flightModeCard.dataset.flightMode = state.flightMode;
+  els.flightModeCard.querySelector("strong").textContent =
+    state.flightMode === "flightmode3" ? "Mode 3" : state.flightMode === "flightmode2" ? "Mode 2" : "Mode 1";
+  els.flightModeCard.querySelector("em").textContent = flightModeLabel(state.flightMode);
+  els.flightMode.textContent = `${els.flightModeCard.querySelector("strong").textContent} / ${flightModeLabel(
+    state.flightMode,
+  )}`;
 }
 
 function handleDiagnosticLine(line) {
@@ -1290,6 +1347,11 @@ function updateRcReadout() {
 }
 
 function formatRcValue(value, mode) {
+  if (mode === "flight") {
+    if (value < 1300) return "MODE 1";
+    if (value > 1700) return "MODE 3";
+    return "MODE 2";
+  }
   if (mode === "switch") {
     return value >= 1500 ? "ON" : "OFF";
   }
@@ -1465,7 +1527,7 @@ els.applyOrientationCal.addEventListener("click", () => {
   if (state.lastLine) {
     applyReading(parseSensorLine(state.lastLine));
   }
-  els.status.textContent = "Applied ADXL orientation mapping";
+  els.status.textContent = "Applied IMU orientation mapping";
 });
 els.resetOrientationCal.addEventListener("click", () => {
   state.orientationMap = DEFAULT_ORIENTATION_MAP;
@@ -1477,7 +1539,7 @@ els.resetOrientationCal.addEventListener("click", () => {
   if (state.lastLine) {
     applyReading(parseSensorLine(state.lastLine));
   }
-  els.status.textContent = "Reset ADXL orientation mapping";
+  els.status.textContent = "Reset IMU orientation mapping";
 });
 els.calibratePose.addEventListener("click", () => {
   calibrateCurrentPose(state.pitch + state.pitchZeroDeg, state.roll + state.rollZeroDeg);
@@ -1500,6 +1562,8 @@ els.parseManual.addEventListener("click", () => {
 function runDemo(time) {
   const t = time * 0.001;
   const heading = (t * 28) % 360;
+  const rc = demoRcChannels(t);
+  const flightMode = rc[4] < 1300 ? "flightmode1" : rc[4] > 1700 ? "flightmode3" : "flightmode2";
   applyReading({
     sensor: "Demo motion",
     x: Math.cos(t) * 420,
@@ -1523,7 +1587,9 @@ function runDemo(time) {
       null,
       Math.round(700 + Math.sin(t * 0.8 + 4) * 240),
     ],
-    rc: demoRcChannels(t),
+    rc,
+    flightMode,
+    flightLabel: flightModeLabel(flightMode),
     raw: `sensor=Demo motion x=${Math.round(Math.cos(t) * 420)} y=${Math.round(
       Math.sin(t * 0.8) * 260,
     )} z=${Math.round(Math.sin(t * 0.6) * 180)} heading=${heading.toFixed(1)} tof0=${Math.round(
@@ -1536,9 +1602,9 @@ function runDemo(time) {
       Math.sin(t * 0.65) * 0.45
     ).toFixed(3)} ay=${(Math.sin(t * 0.9) * 0.5).toFixed(3)} az=0.920 pitch=${(
       Math.sin(t * 0.65) * 22
-    ).toFixed(1)} roll=${(Math.sin(t * 0.9) * 38).toFixed(1)} ${demoRcChannels(t)
+    ).toFixed(1)} roll=${(Math.sin(t * 0.9) * 38).toFixed(1)} ${rc
       .map((value, index) => `rc${index + 1}=${value}`)
-      .join(" ")}`,
+      .join(" ")} flightmode=${flightMode}`,
   });
 }
 
@@ -1624,6 +1690,7 @@ updateTargetQuaternion();
 updateNorthOffsetLabel();
 updateAttitudeMeters();
 updateRcReadout();
+updateFlightModeReadout();
 updateOrientationResult();
 planeRig.userData.plane.quaternion.copy(state.targetQuaternion);
 animate();
