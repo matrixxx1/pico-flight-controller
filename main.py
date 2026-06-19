@@ -67,6 +67,9 @@ PPM_STALE_US = 250_000
 
 REPORT_INTERVAL_S = 0.10
 SENSOR_RETRY_US = 5_000_000
+MAG_SMOOTH_ALPHA = 0.18
+IMU_SMOOTH_ALPHA = 0.22
+TOF_SMOOTH_ALPHA = 0.25
 
 
 def twos_complement(value, bits=16):
@@ -80,6 +83,31 @@ def heading_degrees(x, y):
     if heading < 0:
         heading += 360
     return heading
+
+
+class ExpSmoother:
+    def __init__(self, alpha):
+        self.alpha = alpha
+        self.values = {}
+
+    def reset(self, key=None):
+        if key is None:
+            self.values = {}
+        elif key in self.values:
+            del self.values[key]
+
+    def update(self, key, value):
+        previous = self.values.get(key)
+        if previous is None:
+            self.values[key] = value
+            return value
+        smoothed = previous + self.alpha * (value - previous)
+        self.values[key] = smoothed
+        return smoothed
+
+
+def smooth_vector(smoother, prefix, values):
+    return tuple(smoother.update("{}{}".format(prefix, index), value) for index, value in enumerate(values))
 
 
 class PPMReceiver:
@@ -451,30 +479,33 @@ def find_motion_sensor(i2c, mux):
         return None
 
 
-def read_tof_fields(tof_sensors):
+def read_tof_fields(tof_sensors, smoother):
     fields = []
     for channel, tof in tof_sensors:
         value = "None"
         if tof is not None:
             try:
-                value = str(tof.read_mm())
+                value = str(int(smoother.update(channel, tof.read_mm())))
             except Exception:
+                smoother.reset(channel)
                 value = "err"
         fields.append("tof{}={}".format(channel, value))
     return " ".join(fields)
 
 
-def read_motion_fields(imu):
+def read_motion_fields(imu, smoother):
     if imu is None:
+        smoother.reset()
         return "imu=None adxl=None ax=0.000 ay=0.000 az=0.000 pitch=0.0 roll=0.0"
     try:
-        ax, ay, az = imu.read()
+        ax, ay, az = smooth_vector(smoother, "imu", imu.read())
         pitch = math.degrees(math.atan2(-ax, math.sqrt(ay * ay + az * az)))
         roll = math.degrees(math.atan2(ay, az))
         return "imu={} adxl=ok ax={:.3f} ay={:.3f} az={:.3f} pitch={:.1f} roll={:.1f}".format(
             imu.name, ax, ay, az, pitch, roll
         )
     except Exception as exc:
+        smoother.reset()
         return "imu=err adxl=err ax=0.000 ay=0.000 az=0.000 pitch=0.0 roll=0.0 imuerr={}".format(exc)
 
 
@@ -627,6 +658,9 @@ def main():
     tof_sensors = [(channel, None) for channel in TOF_CHANNELS]
     imu = None
     servo_controller = None
+    mag_smoother = ExpSmoother(MAG_SMOOTH_ALPHA)
+    imu_smoother = ExpSmoother(IMU_SMOOTH_ALPHA)
+    tof_smoother = ExpSmoother(TOF_SMOOTH_ALPHA)
     last_retry = ticks_us()
     last_servo_retry = ticks_us()
 
@@ -676,8 +710,8 @@ def main():
 
         rc_channels = receiver.read()
         pca_fields = apply_rc_outputs(servo_controller, rc_channels)
-        tof_fields = read_tof_fields(tof_sensors)
-        motion_fields = read_motion_fields(imu)
+        tof_fields = read_tof_fields(tof_sensors, tof_smoother)
+        motion_fields = read_motion_fields(imu, imu_smoother)
         rc_fields = "rc=ppm " + " ".join(
             "rc{}={}".format(index, "None" if value is None else value)
             for index, value in enumerate(rc_channels, start=1)
@@ -691,7 +725,7 @@ def main():
             )
         else:
             try:
-                x, y, z = sensor.read()
+                x, y, z = smooth_vector(mag_smoother, "mag", sensor.read())
                 heading = heading_degrees(x, y)
                 if hasattr(sensor, "raw_to_microtesla"):
                     xu = sensor.raw_to_microtesla(x)
@@ -709,6 +743,7 @@ def main():
                         )
                     )
             except OSError as exc:
+                mag_smoother.reset()
                 print(
                     "sensor={} x=0 y=0 z=0 heading=0.0 {} {} {} {} magerr={}".format(
                         sensor.name, tof_fields, motion_fields, rc_fields, pca_fields, exc

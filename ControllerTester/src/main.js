@@ -12,22 +12,83 @@ const DEFAULT_ORIENTATION_MAP = {
 };
 const PWM_OUTPUT_LABELS = [
   "Left front ESC",
-  "Left Front Mount",
+  "Left Front Mount MG995",
   "Right front ESC",
-  "Right front Mount",
+  "Right front Mount MG995",
   "Left Rear ESC",
-  "Left Rear Mount",
+  "Left Rear Mount MG995",
   "Right Rear ESC",
-  "Right Rear Mount",
-  "Elevator",
-  "Rudder",
-  "Landing Gear",
-  "Lights",
-  "Camera Pan",
-  "Camera Tilt",
+  "Right Rear Mount MG995",
+  "Elevator MG995",
+  "Rudder MG995",
+  "Landing Gear MG995",
+  "MEUS AUX -> LTVystore 5V LEDs",
+  "Camera Pan MG995",
+  "Camera Tilt MG995",
   "Spare",
   "Spare",
 ];
+
+const RC_MAPPING_ROWS = [
+  {
+    channel: "RC1",
+    control: "RSH",
+    plane: "Rear mount aileron mix: CH6 and CH8 move differentially.",
+    transition: "Displayed only; no PCA9685 output in current firmware.",
+    hover: "Displayed only; no PCA9685 output in current firmware.",
+  },
+  {
+    channel: "RC2",
+    control: "RSV",
+    plane: "Elevator stick drives CH9.",
+    transition: "Elevator stick drives CH9.",
+    hover: "Elevator stick drives CH9.",
+  },
+  {
+    channel: "RC3",
+    control: "LSV",
+    plane: "Throttle drives ESC outputs CH1, CH3, CH5, and CH7.",
+    transition: "Throttle drives ESC outputs CH1, CH3, CH5, and CH7.",
+    hover: "Throttle drives ESC outputs CH1, CH3, CH5, and CH7.",
+  },
+  {
+    channel: "RC4",
+    control: "LSH",
+    plane: "Rudder stick drives CH10. Rear yaw tilt is disabled.",
+    transition: "Rudder drives CH10 and rear yaw tilt. Right rudder moves CH6; left rudder moves CH8.",
+    hover: "Rear yaw tilt only. CH10 rudder output stays centered at 1500 us.",
+  },
+  {
+    channel: "RC5",
+    control: "MODE",
+    plane: "Low switch selects Mode 1 and sets front mount base to 1000 us.",
+    transition: "Middle switch selects Mode 2 and sets mount base to 1500 us.",
+    hover: "High switch selects Mode 3 and sets mount base to 2000 us.",
+  },
+  {
+    channel: "RC6",
+    control: "Arc right",
+    plane: "Displayed only; no PCA9685 output in current firmware.",
+    transition: "Displayed only; no PCA9685 output in current firmware.",
+    hover: "Displayed only; no PCA9685 output in current firmware.",
+  },
+  {
+    channel: "RC7",
+    control: "LIGHTS",
+    plane: "MEUS Racing AUX RC light switch drives CH12 low/off or high/on for the LTVystore 5mm 5V LEDs.",
+    transition: "MEUS Racing AUX RC light switch drives CH12 low/off or high/on for the LTVystore 5mm 5V LEDs.",
+    hover: "MEUS Racing AUX RC light switch drives CH12 low/off or high/on for the LTVystore 5mm 5V LEDs.",
+  },
+  {
+    channel: "RC8",
+    control: "Arc left",
+    plane: "Displayed only; no PCA9685 output in current firmware.",
+    transition: "Displayed only; no PCA9685 output in current firmware.",
+    hover: "Displayed only; no PCA9685 output in current firmware.",
+  },
+];
+
+const RC_DISPLAY_MODES = ["", "", "", "", "flight", "", "switch", ""];
 
 function makeEmptyTofReadings() {
   return Object.fromEntries(TOF_CHANNELS.map((channel) => [channel, null]));
@@ -97,7 +158,7 @@ app.innerHTML = `
             <div class="rc-channel rc-vertical" data-channel="2"><span>RSV</span><i><b></b></i><strong>--</strong><em>CH2</em></div>
             <div class="rc-channel" data-channel="4"><span>LSH</span><i><b></b></i><strong>--</strong><em>CH4</em></div>
             <div class="rc-channel" data-channel="1"><span>RSH</span><i><b></b></i><strong>--</strong><em>CH1</em></div>
-            <div class="rc-channel" data-channel="7" data-mode="switch"><span>CH7</span><i><b></b></i><strong>--</strong><em>LIGHTS</em></div>
+            <div class="rc-channel" data-channel="7" data-mode="switch"><span>CH7</span><i><b></b></i><strong>--</strong><em>MEUS AUX</em></div>
             <div class="rc-channel" data-channel="5" data-mode="flight"><span>CH5</span><i><b></b></i><strong>--</strong><em>MODE</em></div>
             <div class="rc-channel rc-arc rc-arc-left" data-channel="8" data-mode="arc-left"><span>CH8</span><i><b></b></i><strong>--</strong><em>LEFT -> TOP</em></div>
             <div class="rc-channel rc-arc rc-arc-right" data-channel="6" data-mode="arc-right"><span>CH6</span><i><b></b></i><strong>--</strong><em>BOTTOM -> TOP</em></div>
@@ -144,6 +205,8 @@ app.innerHTML = `
         <div class="utility-actions">
           <button id="show-raw" type="button" class="secondary">Raw Data</button>
           <button id="show-wiring" type="button" class="secondary">Wiring</button>
+          <button id="show-servos" type="button" class="secondary">Servo Outputs</button>
+          <button id="show-mapping" type="button" class="secondary">Mapping</button>
         </div>
         <label class="toggle">
           <input id="demo" type="checkbox" />
@@ -170,16 +233,47 @@ app.innerHTML = `
             <div data-tof="6"><span>Forward TOF5 / CH6</span><strong>--</strong><em>waiting</em></div>
           </div>
         </div>
-        <div>
-          <span>PCA9685 outputs</span>
-          <div class="pwm-grid" aria-label="PCA9685 channel labels">
-            ${PWM_OUTPUT_LABELS.map(
-              (label, index) => `<div><span>CH${index + 1}</span><strong>${label}</strong></div>`,
-            ).join("")}
-          </div>
-        </div>
       </div>
     </aside>
+    <dialog id="servos-dialog" class="modal">
+      <div class="modal-card">
+        <div class="modal-title">
+          <div>
+            <span>Servo controller</span>
+            <strong>PCA9685 outputs</strong>
+          </div>
+          <button id="close-servos" type="button" class="icon-button" aria-label="Close servo outputs">x</button>
+        </div>
+        <div class="wiring-note">
+          <strong>Output labels</strong>
+          <span>App CH1 maps to PCA9685 board output 0 on boards labeled 0-15.</span>
+        </div>
+        <div class="pwm-grid servo-output-grid" aria-label="PCA9685 channel labels">
+          ${PWM_OUTPUT_LABELS.map(
+            (label, index) => `<div><span>CH${index + 1}</span><strong>${label}</strong></div>`,
+          ).join("")}
+        </div>
+      </div>
+    </dialog>
+    <dialog id="mapping-dialog" class="modal">
+      <div class="modal-card">
+        <div class="modal-title">
+          <div>
+            <span>Receiver mapping</span>
+            <strong>Flight mode actions</strong>
+          </div>
+          <button id="close-mapping" type="button" class="icon-button" aria-label="Close receiver mapping">x</button>
+        </div>
+        <div class="mapping-layout">
+          <div id="mapping-live" class="mapping-live" aria-label="Live RC channel values"></div>
+          <div class="mapping-note">
+            <strong>Receiver fallback</strong>
+            <span>If the receiver signal is missing, ESC outputs go to 1000 us, servos center at 1500 us, lights turn off, and the firmware falls back to Mode 1 / Plane.</span>
+          </div>
+          <div id="mapping-table" class="mapping-table-wrap" aria-label="Receiver channel mapping table"></div>
+        </div>
+      </div>
+    </dialog>
     <dialog id="wiring-dialog" class="modal">
       <div class="modal-card">
         <div class="modal-title">
@@ -235,14 +329,14 @@ app.innerHTML = `
             </div>
             <div class="direct-card">
               <span>PCA9685 servo rail</span>
-              <strong>V+ -> external 5-6V BEC</strong>
-              <em>Servos/ESC leads plug into the PCA9685 outputs; keep BEC ground common</em>
+              <strong>V+ -> FEICHAO 8A UBEC 6V OUT</strong>
+              <em>UBEC caps PCA9685 V+ at 6V; keep UBEC ground common</em>
             </div>
-          </div>
-          <div class="pwm-wiring-grid">
-            ${PWM_OUTPUT_LABELS.map(
-              (label, index) => `<div><span>PCA CH${index + 1}</span><strong>${label}</strong></div>`,
-            ).join("")}
+            <div class="direct-card">
+              <span>ESC servo extensions</span>
+              <strong>Signal + GND only to CH1/3/5/7</strong>
+              <em>Disconnect the red wire on each ESC extension to prevent voltage backfeed</em>
+            </div>
           </div>
           <div class="mux-grid">
             <div><span>HW-617 CH0</span><strong>UL53LDK #0</strong><em>VIN/VCC, GND, SC0, SD0</em></div>
@@ -347,6 +441,14 @@ const els = {
   showWiring: document.querySelector("#show-wiring"),
   closeWiring: document.querySelector("#close-wiring"),
   wiringDialog: document.querySelector("#wiring-dialog"),
+  showServos: document.querySelector("#show-servos"),
+  closeServos: document.querySelector("#close-servos"),
+  servosDialog: document.querySelector("#servos-dialog"),
+  showMapping: document.querySelector("#show-mapping"),
+  closeMapping: document.querySelector("#close-mapping"),
+  mappingDialog: document.querySelector("#mapping-dialog"),
+  mappingLive: document.querySelector("#mapping-live"),
+  mappingTable: document.querySelector("#mapping-table"),
   northOffset: document.querySelector("#north-offset"),
   demo: document.querySelector("#demo"),
   manualLine: document.querySelector("#manual-line"),
@@ -1344,6 +1446,7 @@ function updateRcReadout() {
       valueEl.textContent = value === "err" ? "err" : "no pulse";
     }
   });
+  updateMappingLive();
 }
 
 function formatRcValue(value, mode) {
@@ -1361,6 +1464,64 @@ function formatRcValue(value, mode) {
     return "MIDDLE";
   }
   return `${value} us`;
+}
+
+function updateMappingDialog() {
+  els.mappingTable.innerHTML = `
+    <table>
+      <thead>
+        <tr>
+          <th scope="col">Receiver</th>
+          <th scope="col">Mode 1<br><span>Plane</span></th>
+          <th scope="col">Mode 2<br><span>Transition</span></th>
+          <th scope="col">Mode 3<br><span>Hover</span></th>
+        </tr>
+      </thead>
+      <tbody>
+        ${RC_MAPPING_ROWS.map(
+          (row) => `
+            <tr>
+              <th scope="row">
+                <strong>${row.channel}</strong>
+                <span>${row.control}</span>
+              </th>
+              <td>${row.plane}</td>
+              <td>${row.transition}</td>
+              <td>${row.hover}</td>
+            </tr>
+          `,
+        ).join("")}
+      </tbody>
+    </table>
+  `;
+  updateMappingLive();
+}
+
+function updateMappingLive() {
+  if (!els.mappingLive) return;
+  const liveLabel = `${state.flightMode === "flightmode3" ? "Mode 3" : state.flightMode === "flightmode2" ? "Mode 2" : "Mode 1"} / ${flightModeLabel(
+    state.flightMode,
+  )}`;
+  const channels = state.rc
+    .map(
+      (value, index) => `
+        <div>
+          <span>RC${index + 1}</span>
+          <strong>${
+            typeof value === "number" ? formatRcValue(value, RC_DISPLAY_MODES[index]) : value === "err" ? "err" : "--"
+          }</strong>
+        </div>
+      `,
+    )
+    .join("");
+  els.mappingLive.innerHTML = `
+    <div class="mapping-live-title">
+      <span>Live receiver</span>
+      <strong>${liveLabel}</strong>
+      <em>Current PPM input</em>
+    </div>
+    <div class="mapping-live-grid">${channels}</div>
+  `;
 }
 
 function demoRcChannels(t) {
@@ -1492,13 +1653,20 @@ els.showRaw.addEventListener("click", () => els.rawDialog.showModal());
 els.closeRaw.addEventListener("click", () => els.rawDialog.close());
 els.showWiring.addEventListener("click", () => els.wiringDialog.showModal());
 els.closeWiring.addEventListener("click", () => els.wiringDialog.close());
+els.showServos.addEventListener("click", () => els.servosDialog.showModal());
+els.closeServos.addEventListener("click", () => els.servosDialog.close());
+els.showMapping.addEventListener("click", () => {
+  updateMappingDialog();
+  els.mappingDialog.showModal();
+});
+els.closeMapping.addEventListener("click", () => els.mappingDialog.close());
 els.showOrientationCal.addEventListener("click", () => {
   updateOrientationLive();
   updateOrientationResult();
   els.orientationDialog.showModal();
 });
 els.closeOrientationCal.addEventListener("click", () => els.orientationDialog.close());
-for (const dialog of [els.rawDialog, els.wiringDialog, els.orientationDialog]) {
+for (const dialog of [els.rawDialog, els.wiringDialog, els.servosDialog, els.mappingDialog, els.orientationDialog]) {
   dialog.addEventListener("click", (event) => {
     if (event.target === dialog) {
       dialog.close();
@@ -1692,5 +1860,6 @@ updateAttitudeMeters();
 updateRcReadout();
 updateFlightModeReadout();
 updateOrientationResult();
+updateMappingDialog();
 planeRig.userData.plane.quaternion.copy(state.targetQuaternion);
 animate();

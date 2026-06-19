@@ -472,15 +472,13 @@ code {
   color: #9fb0c3;
 }
 
-.pwm-grid,
-.pwm-wiring-grid {
+.pwm-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 7px;
 }
 
-.pwm-grid div,
-.pwm-wiring-grid div {
+.pwm-grid div {
   min-width: 0;
   padding: 7px 8px;
   border-radius: 8px;
@@ -488,16 +486,14 @@ code {
   border: 1px solid rgba(123, 199, 255, 0.2);
 }
 
-.pwm-grid span,
-.pwm-wiring-grid span {
+.pwm-grid span {
   display: block;
   color: #8da0b4;
   font-size: 11px;
   text-transform: uppercase;
 }
 
-.pwm-grid strong,
-.pwm-wiring-grid strong {
+.pwm-grid strong {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -506,7 +502,7 @@ code {
   font-size: 12px;
 }
 
-.pwm-wiring-grid {
+.servo-output-grid {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
@@ -596,6 +592,163 @@ textarea {
 
 .orientation-map code {
   white-space: pre-wrap;
+}
+
+.mapping-layout {
+  display: grid;
+  gap: 12px;
+}
+
+.mapping-live-title span {
+  color: #8da0b4;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.mapping-live {
+  display: grid;
+  gap: 9px;
+  padding: 11px;
+  border: 1px solid rgba(123, 199, 255, 0.24);
+  border-radius: 8px;
+  background: rgba(123, 199, 255, 0.07);
+}
+
+.mapping-live-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.mapping-live-title strong {
+  color: #f1f5f9;
+  font-size: 13px;
+}
+
+.mapping-live-title em {
+  color: #9fb0c3;
+  font-size: 12px;
+  font-style: normal;
+}
+
+.mapping-live-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.mapping-live-grid div {
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.24);
+}
+
+.mapping-live-grid div {
+  display: grid;
+  gap: 3px;
+  padding: 8px;
+}
+
+.mapping-live-grid span {
+  color: #8da0b4;
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.mapping-live-grid strong {
+  overflow: hidden;
+  color: #d6f7ea;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mapping-note {
+  display: grid;
+  gap: 4px;
+  padding: 11px;
+  border: 1px solid rgba(255, 207, 90, 0.32);
+  border-radius: 8px;
+  background: rgba(255, 207, 90, 0.08);
+}
+
+.mapping-note strong {
+  color: #f1f5f9;
+  font-size: 13px;
+}
+
+.mapping-note span {
+  color: #a9b9cb;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.mapping-table-wrap {
+  overflow: auto;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.24);
+}
+
+.mapping-table-wrap table {
+  width: 100%;
+  min-width: 720px;
+  border-collapse: collapse;
+}
+
+.mapping-table-wrap th,
+.mapping-table-wrap td {
+  width: 23%;
+  padding: 10px 11px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  border-left: 1px solid rgba(255, 255, 255, 0.06);
+  color: #cbd5e1;
+  font-size: 12px;
+  line-height: 1.35;
+  text-align: left;
+  vertical-align: top;
+}
+
+.mapping-table-wrap th:first-child,
+.mapping-table-wrap td:first-child {
+  width: 110px;
+  border-left: 0;
+}
+
+.mapping-table-wrap thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  color: #f1f5f9;
+  background: rgba(21, 28, 36, 0.98);
+  font-size: 13px;
+}
+
+.mapping-table-wrap thead span,
+.mapping-table-wrap tbody th span {
+  display: block;
+  margin-top: 3px;
+  color: #8da0b4;
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.mapping-table-wrap tbody th {
+  color: #d6f7ea;
+  background: rgba(47, 211, 158, 0.07);
+}
+
+.mapping-table-wrap tbody th strong {
+  display: block;
+  color: #f1f5f9;
+  font-size: 14px;
+}
+
+.mapping-table-wrap tbody tr:last-child th,
+.mapping-table-wrap tbody tr:last-child td {
+  border-bottom: 0;
 }
 
 .attitude-strip {
@@ -1215,6 +1368,10 @@ textarea {
     border-left: 0;
     border-top: 1px solid rgba(255, 255, 255, 0.09);
   }
+
+  .mapping-live-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 560px) {
@@ -1249,10 +1406,6 @@ textarea {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .pwm-wiring-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
   .rc-channel {
     grid-template-columns: 30px minmax(44px, 1fr) 50px;
   }
@@ -1263,6 +1416,10 @@ textarea {
 
   .rc-arc {
     grid-template-columns: 30px 40px minmax(44px, 1fr);
+  }
+
+  .mapping-live-title {
+    display: grid;
   }
 
   .panel {
