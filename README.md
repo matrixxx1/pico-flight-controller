@@ -5,7 +5,7 @@ Raspberry Pi Pico receiver and sensor testbed for a flight-controller-style buil
 ## Contents
 
 - `main.py` - MicroPython firmware that reads the R8EF PPM signal on Pico `GP15` and drives the PCA9685 outputs through the HW-617 mux.
-- `vl53l0x.py` - VL53L0X / UL53LDK distance sensor driver used by earlier sensor builds.
+- `vl53l0x.py` - VL53L0X / UL53LDK distance sensor driver for the remaining side sensors.
 - `ControllerTester/` - Vite + Three.js browser dashboard for Web Serial display of receiver and sensor readings.
 - `simulator/` - Local browser simulator that generates Pico-shaped serial lines for drift, RC input, and fault testing.
 - `QMC5883P.pdf` - Compass sensor reference sheet.
@@ -18,8 +18,8 @@ Raspberry Pi Pico receiver and sensor testbed for a flight-controller-style buil
 - Radiolink transmitter bound to the R8EF.
 - Radiolink Gens Ace 7.4V 2S LiPo battery powering the transmitter.
 - HW-617 / TCA9548A I2C multiplexer.
-- Five UL53LDK / VL53L0X time-of-flight distance sensors.
-- Four VL53L1X time-of-flight distance sensors ordered for longer-range indoor altitude/range sensing.
+- Three VL53L1X time-of-flight distance sensors for bottom, top, and front range sensing.
+- Two UL53LDK / VL53L0X time-of-flight distance sensors for left/right side range sensing.
 - GY-271 compass module with QMC5883P / HP5883 magnetometer.
 - MPU-6050 accelerometer/gyroscope module.
 - PCA9685 16-channel 12-bit I2C PWM servo driver.
@@ -84,13 +84,13 @@ Pico GND ---------------------------- PCA9685 GND
 FEICHAO 8A UBEC 6V OUT + ------------ PCA9685 V+
 FEICHAO 8A UBEC GND ----------------- PCA9685 GND
 
-HW-617 CH0: SC0/SCL + SD0/SDA ------- UL53LDK / VL53L0X #0
-HW-617 CH1: SC1/SCL + SD1/SDA ------- UL53LDK / VL53L0X #1
-HW-617 CH2: SC2/SCL + SD2/SDA ------- UL53LDK / VL53L0X #2
-HW-617 CH3: SC3/SCL + SD3/SDA ------- UL53LDK / VL53L0X #3
+HW-617 CH0: SC0/SCL + SD0/SDA ------- Bottom TOF0 / VL53L1X
+HW-617 CH1: SC1/SCL + SD1/SDA ------- Top TOF1 / VL53L1X
+HW-617 CH2: SC2/SCL + SD2/SDA ------- Right TOF2 / UL53LDK / VL53L0X
+HW-617 CH3: SC3/SCL + SD3/SDA ------- Left TOF3 / UL53LDK / VL53L0X
 HW-617 CH4: SC4/SCL + SD4/SDA ------- GY-271 compass
 HW-617 CH5: SC5/SCL + SD5/SDA ------- MPU-6050 IMU
-HW-617 CH6: SC6/SCL + SD6/SDA ------- Forward TOF5 / UL53LDK / VL53L0X
+HW-617 CH6: SC6/SCL + SD6/SDA ------- Front TOF5 / VL53L1X
 HW-617 CH7: SC7/SCL + SD7/SDA ------- PCA9685 PWM servo driver
 ```
 
@@ -113,18 +113,18 @@ HW-617 CH7: SC7/SCL + SD7/SDA ------- PCA9685 PWM servo driver
 | ESC servo extension leads | Signal + GND only | PCA9685 `CH1`, `CH3`, `CH5`, `CH7` | Disconnect / remove the red wire from each ESC servo extension cable to prevent voltage backfeed into the PCA9685 rail. |
 | MG995 55g metal-gear servos | Signal/V+/GND | PCA9685 servo outputs | Servo outputs are powered from the FEICHAO-regulated 6V `V+` rail. |
 | Hooyu RDS3225 25kg servos | Signal/V+/GND | Available PCA9685 servo outputs | High-torque digital servos; confirm voltage/current draw before running several from the 8A UBEC at once. |
-| UL53LDK #0 | SDA/SCL | HW-617 `SD0` / `SC0` | VL53L0X distance sensor. |
-| UL53LDK #1 | SDA/SCL | HW-617 `SD1` / `SC1` | VL53L0X distance sensor. |
-| UL53LDK #2 | SDA/SCL | HW-617 `SD2` / `SC2` | VL53L0X distance sensor. |
-| UL53LDK #3 | SDA/SCL | HW-617 `SD3` / `SC3` | VL53L0X distance sensor. |
+| Bottom TOF0 / VL53L1X | SDA/SCL | HW-617 `SD0` / `SC0` | Longer-range bottom/altitude distance sensor. |
+| Top TOF1 / VL53L1X | SDA/SCL | HW-617 `SD1` / `SC1` | Longer-range top/ceiling distance sensor. |
+| Right TOF2 / UL53LDK | SDA/SCL | HW-617 `SD2` / `SC2` | VL53L0X side distance sensor. |
+| Left TOF3 / UL53LDK | SDA/SCL | HW-617 `SD3` / `SC3` | VL53L0X side distance sensor. |
 | GY-271 | SDA/SCL | HW-617 `SD4` / `SC4` | Compass / magnetometer. |
 | MPU-6050 | SDA/SCL | HW-617 `SD5` / `SC5` | Accelerometer/gyro IMU. |
-| Forward TOF5 / UL53LDK | SDA/SCL | HW-617 `SD6` / `SC6` | Fifth physical TOF sensor, connected on mux channel 6. |
+| Front TOF5 / VL53L1X | SDA/SCL | HW-617 `SD6` / `SC6` | Longer-range front distance sensor, connected on mux channel 6. |
 | PCA9685 | SDA/SCL | HW-617 `SD7` / `SC7` | PWM servo driver, connected on mux channel 7. |
 | All I2C sensors | VCC / VIN | Pico `3V3` rail | Use 3.3V-compatible modules. |
 | All I2C sensors | GND | Pico `GND` rail | Shared ground. |
 
-Planned upgrade: four VL53L1X ToF sensors have been ordered for longer-range indoor altitude/range sensing. The current firmware and wiring map still target the installed UL53LDK / VL53L0X sensors until those modules are swapped in and the driver is updated.
+The firmware uses the mux channel to choose the ToF driver because both VL53L0X and VL53L1X modules use the normal `0x29` I2C address. Channels `0`, `1`, and `6` are treated as VL53L1X. Channels `2` and `3` remain VL53L0X.
 
 ## PCA9685 Output Labels
 
@@ -161,13 +161,16 @@ R8EF CH2 PPM stream -> Pico GP15 -> HW-617 CH7 -> PCA9685 outputs
 
 | RC Channel | Transmitter Control | PCA9685 Output |
 |---|---|---|
-| RC2 | Elevator stick | CH9 / board output 8 |
-| RC3 | Speed / throttle | CH1, CH3, CH5, CH7 ESC outputs |
+| RC1 | Right stick left/right | Plane/transition rear mount aileron mix on CH6 and CH8; hover side-to-side ESC boost on CH1/CH5 or CH3/CH7, capped inside the 60% joystick ESC authority limit |
+| RC2 | Right stick up/down / elevator | Plane elevator on CH9; transition elevator plus slight front ESC boost on CH1/CH3; hover pitch mix on front/rear ESCs and mounts |
+| RC3 | Speed / throttle | CH1, CH3, CH5, CH7 ESC outputs, capped at 60% joystick authority |
 | RC4 | Rudder stick | CH10 / board output 9 |
 | RC5 | Flight mode / mount-position switch | Low = `flightmode1` / plane, mid = `flightmode2` / transition, high = `flightmode3` / hover |
 | RC7 | MEUS Racing AUX RC light remote controller switch for LTVystore 5mm 5V prewired LED bulbs | CH12 / board output 11 |
 
-RC5 maps the switch positions to both flight mode and the base mount position: low/plane sends `1000us`, middle/transition sends `1500us`, and high/hover sends `2000us` to the mount servos. In `flightmode1`, RC4 controls the rudder servo and RC1 controls the rear engine mounts differentially like ailerons. In `flightmode2`, RC4 controls both the rudder servo and the rear mount yaw tilt. In `flightmode3`, RC4 controls the rear mount yaw tilt while the rudder servo is centered. For rear mount yaw tilt, right rudder drives only the left rear mount away from the RC5 base position, and left rudder drives only the right rear mount away from the RC5 base position; the other rear mount stays at the RC5 base position. If the receiver signal is missing, ESC outputs go to `1000us`, servos center at `1500us`, lights go off, and the mode falls back to `flightmode1`.
+RC-derived ESC output is capped at `1600us`, which is 60% of the normal `1000us` to `2000us` ESC command range. The remaining 40% is reserved for the Pico's future PID stabilization output, not direct joystick authority. RC5 maps the switch positions to the mount posture: low/plane puts the front mounts straight ahead and rear mounts straight back, middle/transition moves the mounts to their midpoint, and high/hover puts the front mounts up and rear mounts down. The rear motors are physically set opposite the front motors, so the same mode pulse creates the opposite front/rear posture.
+
+In `flightmode1`, RC2 controls the elevator servo on CH9, RC4 controls the rudder servo, and RC1 controls the rear engine mounts differentially like ailerons. In `flightmode2`, RC2 still controls the elevator and also slightly boosts the front ESCs on CH1 and CH3; RC4 controls the rudder servo and both RC1 and RC4 contribute to rear mount aileron movement on CH6 and CH8. In `flightmode3`, RC4 controls rear mount yaw tilt while the rudder servo is centered, RC1 commands side-to-side hover movement by slightly increasing the opposing-side ESC pair, and RC2 commands hover pitch: stick up boosts the rear ESCs on CH5 and CH7 while nudging the rear mounts upward, and stick back boosts the front ESCs on CH1 and CH3 while slightly lowering the front mounts. If the receiver signal is missing, ESC outputs go to `1000us`, servos center at `1500us`, lights go off, and the mode falls back to `flightmode1`.
 
 Sensor telemetry is lightly smoothed in firmware for steadier display while sitting still. RC channel values are not smoothed before control output, so stick/switch response stays direct.
 

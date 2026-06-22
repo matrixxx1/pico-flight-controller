@@ -25,6 +25,7 @@ MPU6050_ADDR_LOW = 0x68
 MPU6050_ADDR_HIGH = 0x69
 
 TOF_CHANNELS = (0, 1, 2, 3, 6)
+VL53L1X_CHANNELS = (0, 1, 6)
 MAG_CHANNEL = 4
 ADXL_CHANNEL = 5
 PCA9685_MUX_CHANNEL = 7
@@ -34,6 +35,7 @@ PCA_OSC_HZ = 25_000_000
 PULSE_MIN_US = 1000
 PULSE_MID_US = 1500
 PULSE_MAX_US = 2000
+RC_THROTTLE_MAX_US = 1600
 RC_INPUT_MIN_US = 1000
 RC_INPUT_MAX_US = 2000
 LIGHT_SWITCH_US = 1500
@@ -50,6 +52,14 @@ FLIGHT_MODE_LOW_THRESHOLD_US = 1300
 FLIGHT_MODE_HIGH_THRESHOLD_US = 1700
 
 ESC_OUTPUTS = (0, 2, 4, 6)
+LEFT_FRONT_ESC_OUTPUT = 0
+RIGHT_FRONT_ESC_OUTPUT = 2
+LEFT_REAR_ESC_OUTPUT = 4
+RIGHT_REAR_ESC_OUTPUT = 6
+LEFT_ESC_OUTPUTS = (0, 4)
+RIGHT_ESC_OUTPUTS = (2, 6)
+FRONT_ESC_OUTPUTS = (0, 2)
+REAR_ESC_OUTPUTS = (4, 6)
 MOUNT_OUTPUTS = (1, 3, 5, 7)
 FRONT_MOUNT_OUTPUTS = (1, 3)
 LEFT_REAR_MOUNT_OUTPUT = 5
@@ -57,6 +67,9 @@ RIGHT_REAR_MOUNT_OUTPUT = 7
 ELEVATOR_OUTPUT = 8
 RUDDER_OUTPUT = 9
 LIGHT_OUTPUT = 11
+HOVER_SIDE_ESC_BOOST_US = 150
+PITCH_ESC_BOOST_US = 150
+HOVER_PITCH_MOUNT_ADJUST_US = 150
 
 PPM_PIN = 15
 RC_CHANNELS = 8
@@ -70,6 +83,21 @@ SENSOR_RETRY_US = 5_000_000
 MAG_SMOOTH_ALPHA = 0.18
 IMU_SMOOTH_ALPHA = 0.22
 TOF_SMOOTH_ALPHA = 0.25
+
+VL53L1X_DEFAULT_CONFIGURATION = bytes([
+    0x00, 0x00, 0x00, 0x01, 0x02, 0x00, 0x02, 0x08,
+    0x00, 0x08, 0x10, 0x01, 0x01, 0x00, 0x00, 0x00,
+    0x00, 0xFF, 0x00, 0x0F, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x20, 0x0B, 0x00, 0x00, 0x02, 0x0A, 0x21,
+    0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x00, 0xC8,
+    0x00, 0x00, 0x38, 0xFF, 0x01, 0x00, 0x08, 0x00,
+    0x00, 0x01, 0xDB, 0x0F, 0x01, 0xF1, 0x0D, 0x01,
+    0x68, 0x00, 0x80, 0x08, 0xB8, 0x00, 0x00, 0x00,
+    0x00, 0x0F, 0x89, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x01, 0x0F, 0x0D, 0x0E, 0x0E, 0x00,
+    0x00, 0x02, 0xC7, 0xFF, 0x9B, 0x00, 0x00, 0x00,
+    0x01, 0x01, 0x40,
+])
 
 
 def twos_complement(value, bits=16):
@@ -300,12 +328,65 @@ class MuxedVL53L0X:
             raise RuntimeError("vl53l0x.py is missing from the Pico")
         self.mux = mux
         self.channel = channel
+        self.name = "VL53L0X"
         self.mux.select(channel)
         self.sensor = VL53L0X(self.mux.i2c, address=VL53L0X_ADDR, io_timeout_ms=250)
 
     def read_mm(self):
         self.mux.select(self.channel)
         return self.sensor.range
+
+
+class MuxedVL53L1X:
+    def __init__(self, mux, channel, address=VL53L0X_ADDR):
+        self.mux = mux
+        self.channel = channel
+        self.address = address
+        self.name = "VL53L1X"
+        self.mux.select(channel)
+        self.reset()
+        sleep(0.001)
+        if self.read_reg16(0x010F) != 0xEACC:
+            raise RuntimeError("VL53L1X model ID mismatch")
+        self.mux.i2c.writeto_mem(
+            self.address,
+            0x002D,
+            VL53L1X_DEFAULT_CONFIGURATION,
+            addrsize=16,
+        )
+        self.write_reg16(0x001E, self.read_reg16(0x0022) * 4)
+        sleep(0.2)
+
+    def write_reg(self, register, value):
+        self.mux.select(self.channel)
+        self.mux.i2c.writeto_mem(self.address, register, bytes([value & 0xFF]), addrsize=16)
+
+    def write_reg16(self, register, value):
+        self.mux.select(self.channel)
+        self.mux.i2c.writeto_mem(
+            self.address,
+            register,
+            bytes([(value >> 8) & 0xFF, value & 0xFF]),
+            addrsize=16,
+        )
+
+    def read_reg16(self, register):
+        self.mux.select(self.channel)
+        data = self.mux.i2c.readfrom_mem(self.address, register, 2, addrsize=16)
+        return (data[0] << 8) | data[1]
+
+    def reset(self):
+        self.write_reg(0x0000, 0x00)
+        sleep(0.1)
+        self.write_reg(0x0000, 0x01)
+        sleep(0.1)
+
+    def read_mm(self):
+        self.mux.select(self.channel)
+        data = self.mux.i2c.readfrom_mem(self.address, 0x0089, 17, addrsize=16)
+        value = (data[13] << 8) | data[14]
+        self.write_reg(0x0086, 0x01)
+        return value
 
 
 class MuxedMagnetometer:
@@ -440,13 +521,17 @@ def find_tof_sensors(i2c, mux):
             devices = i2c.scan()
             print("TCA channel {} devices: {}".format(channel, [hex(device) for device in devices]))
             if VL53L0X_ADDR in devices:
-                sensors.append((channel, MuxedVL53L0X(mux, channel)))
-                print("Detected VL53L0X on TCA channel {}".format(channel))
+                if channel in VL53L1X_CHANNELS:
+                    sensor = MuxedVL53L1X(mux, channel)
+                else:
+                    sensor = MuxedVL53L0X(mux, channel)
+                sensors.append((channel, sensor))
+                print("Detected {} on TCA channel {}".format(sensor.name, channel))
             else:
                 sensors.append((channel, None))
         except Exception as exc:
             sensors.append((channel, None))
-            print("VL53L0X channel {} init failed: {}".format(channel, exc))
+            print("TOF channel {} init failed: {}".format(channel, exc))
     mux.safe_disable()
     return sensors
 
@@ -489,7 +574,9 @@ def read_tof_fields(tof_sensors, smoother):
             except Exception:
                 smoother.reset(channel)
                 value = "err"
+        sensor_type = tof.name if tof is not None else "None"
         fields.append("tof{}={}".format(channel, value))
+        fields.append("toftype{}={}".format(channel, sensor_type))
     return " ".join(fields)
 
 
@@ -522,7 +609,7 @@ def rc_pulse_to_servo(value):
 def rc_pulse_to_esc(value):
     if value is None:
         return PULSE_MIN_US
-    return int(clamp(value, RC_INPUT_MIN_US, RC_INPUT_MAX_US))
+    return int(clamp(value, RC_INPUT_MIN_US, RC_THROTTLE_MAX_US))
 
 
 def rc_switch_to_mount(value):
@@ -543,25 +630,48 @@ def rc_switch_to_flight_mode(value):
     return FLIGHT_MODE_2, "transition"
 
 
-def rear_yaw_mount_value(base, rudder):
-    amount = min(abs(rudder - PULSE_MID_US), 500)
+def rc_stick_offset(value):
+    value = rc_pulse_to_servo(value)
+    offset = clamp(value - PULSE_MID_US, -500, 500)
+    if abs(offset) <= RUDDER_DEADBAND_US:
+        return 0
+    return offset
+
+
+def rear_yaw_mount_delta(base, rudder_offset):
+    amount = min(abs(rudder_offset), 500)
     if amount <= RUDDER_DEADBAND_US:
-        return base
+        return 0
     if base > PULSE_MID_US:
         target = PULSE_MIN_US
     else:
         target = PULSE_MAX_US
-    return int(base + (target - base) * (amount / 500))
+    return int((target - base) * (amount / 500))
 
 
-def rear_aileron_mount_values(channel_value):
-    value = rc_pulse_to_servo(channel_value)
-    offset = clamp(value - PULSE_MID_US, -500, 500)
-    if abs(offset) <= RUDDER_DEADBAND_US:
-        return PULSE_MID_US, PULSE_MID_US
-    left = int(clamp(PULSE_MID_US + offset, PULSE_MIN_US, PULSE_MAX_US))
-    right = int(clamp(PULSE_MID_US - offset, PULSE_MIN_US, PULSE_MAX_US))
+def rear_mount_values(base, aileron_offset=0, rudder_offset=0):
+    aileron_offset = clamp(aileron_offset, -500, 500)
+    left = base + aileron_offset
+    right = base - aileron_offset
+    yaw_delta = rear_yaw_mount_delta(base, rudder_offset)
+    if rudder_offset > 0:
+        left += yaw_delta
+    elif rudder_offset < 0:
+        right += yaw_delta
+    left = int(clamp(left, PULSE_MIN_US, PULSE_MAX_US))
+    right = int(clamp(right, PULSE_MIN_US, PULSE_MAX_US))
     return left, right
+
+
+def add_esc_boost(esc_speeds, outputs, boost):
+    if boost <= 0:
+        return
+    for output in outputs:
+        esc_speeds[output] = int(clamp(esc_speeds[output] + boost, PULSE_MIN_US, RC_THROTTLE_MAX_US))
+
+
+def stick_boost(offset, max_boost=PITCH_ESC_BOOST_US):
+    return int((min(abs(offset), 500) * max_boost) / 500)
 
 
 def apply_rc_outputs(controller, channels):
@@ -572,30 +682,62 @@ def apply_rc_outputs(controller, channels):
     speed = rc_pulse_to_esc(channels[2])
     elevator = rc_pulse_to_servo(channels[1])
     rudder = rc_pulse_to_servo(channels[3])
+    right_stick_lr_offset = rc_stick_offset(channels[0])
+    right_stick_ud_offset = rc_stick_offset(channels[1])
+    left_stick_lr_offset = rc_stick_offset(channels[3])
     mount = rc_switch_to_mount(channels[4])
     lights_on = channels[6] is not None and channels[6] >= LIGHT_SWITCH_US
     light = PULSE_MAX_US if lights_on else PULSE_MIN_US
+    esc_speeds = [PULSE_MIN_US] * 16
+    for output in ESC_OUTPUTS:
+        esc_speeds[output] = speed
     front_mount = mount
     left_rear_mount = mount
     right_rear_mount = mount
     rudder_output = rudder
     rudder_control = flight_mode in (FLIGHT_MODE_1, FLIGHT_MODE_2)
-    rear_mount_control = flight_mode in (FLIGHT_MODE_2, FLIGHT_MODE_3)
-    rear_aileron_control = flight_mode == FLIGHT_MODE_1
+    rear_mount_control = flight_mode in (FLIGHT_MODE_1, FLIGHT_MODE_2, FLIGHT_MODE_3)
+    rear_aileron_control = flight_mode in (FLIGHT_MODE_1, FLIGHT_MODE_2, FLIGHT_MODE_3)
+    rear_yaw_control = flight_mode in (FLIGHT_MODE_2, FLIGHT_MODE_3)
+    rear_mount_base = mount
+    rear_aileron_offset = right_stick_lr_offset
+    rear_yaw_offset = 0
+    hover_pitch_boost = 0
+    hover_mount_pitch_offset = 0
+    transition_front_boost = 0
+    if flight_mode == FLIGHT_MODE_2:
+        rear_aileron_offset = clamp(right_stick_lr_offset + left_stick_lr_offset, -500, 500)
+        rear_yaw_offset = left_stick_lr_offset
+        transition_front_boost = stick_boost(right_stick_ud_offset)
+        add_esc_boost(esc_speeds, FRONT_ESC_OUTPUTS, transition_front_boost)
+    elif flight_mode == FLIGHT_MODE_3:
+        rear_aileron_offset = 0
+        rear_yaw_offset = left_stick_lr_offset
+        hover_pitch_boost = stick_boost(right_stick_ud_offset)
+        hover_mount_pitch_offset = int((min(abs(right_stick_ud_offset), 500) * HOVER_PITCH_MOUNT_ADJUST_US) / 500)
+        if right_stick_ud_offset > 0:
+            add_esc_boost(esc_speeds, REAR_ESC_OUTPUTS, hover_pitch_boost)
+        elif right_stick_ud_offset < 0:
+            add_esc_boost(esc_speeds, FRONT_ESC_OUTPUTS, hover_pitch_boost)
+            front_mount = int(clamp(front_mount - hover_mount_pitch_offset, PULSE_MIN_US, PULSE_MAX_US))
 
-    if rear_aileron_control:
-        left_rear_mount, right_rear_mount = rear_aileron_mount_values(channels[0])
-    elif rear_mount_control:
-        if rudder > PULSE_MID_US + RUDDER_DEADBAND_US:
-            left_rear_mount = rear_yaw_mount_value(mount, rudder)
-        elif rudder < PULSE_MID_US - RUDDER_DEADBAND_US:
-            right_rear_mount = rear_yaw_mount_value(mount, rudder)
+    left_rear_mount, right_rear_mount = rear_mount_values(rear_mount_base, rear_aileron_offset, rear_yaw_offset)
+    hover_side_boost = 0
+    if flight_mode == FLIGHT_MODE_3:
+        hover_side_boost = stick_boost(right_stick_lr_offset, HOVER_SIDE_ESC_BOOST_US)
+        if right_stick_lr_offset > 0:
+            add_esc_boost(esc_speeds, LEFT_ESC_OUTPUTS, hover_side_boost)
+        elif right_stick_lr_offset < 0:
+            add_esc_boost(esc_speeds, RIGHT_ESC_OUTPUTS, hover_side_boost)
+        if right_stick_ud_offset > 0:
+            left_rear_mount = int(clamp(left_rear_mount - hover_mount_pitch_offset, PULSE_MIN_US, PULSE_MAX_US))
+            right_rear_mount = int(clamp(right_rear_mount - hover_mount_pitch_offset, PULSE_MIN_US, PULSE_MAX_US))
     if not rudder_control:
         rudder_output = PULSE_MID_US
 
     try:
         for output in ESC_OUTPUTS:
-            controller.set_pulse_us(output, speed)
+            controller.set_pulse_us(output, esc_speeds[output])
         for output in FRONT_MOUNT_OUTPUTS:
             controller.set_pulse_us(output, front_mount)
         controller.set_pulse_us(LEFT_REAR_MOUNT_OUTPUT, left_rear_mount)
@@ -603,10 +745,17 @@ def apply_rc_outputs(controller, channels):
         controller.set_pulse_us(ELEVATOR_OUTPUT, elevator)
         controller.set_pulse_us(RUDDER_OUTPUT, rudder_output)
         controller.set_pulse_us(LIGHT_OUTPUT, light)
-        return "pca=ok flightmode={} flight={} esc={} mount={} frontmount={} leftrear={} rightrear={} elevator={} rudder={} rudderout={} rudderctrl={} rearctrl={} aileronctrl={} lights={} light={}".format(
+        return "pca=ok flightmode={} flight={} esc={} lfesc={} rfesc={} lresc={} rresc={} hoverboost={} pitchboost={} transfrontboost={} mount={} frontmount={} leftrear={} rightrear={} elevator={} rudder={} rudderout={} rightsticklr={} rightstickud={} leftsticklr={} aileronmix={} yawmix={} pitchmount={} rudderctrl={} rearctrl={} aileronctrl={} yawctrl={} lights={} light={}".format(
             flight_mode,
             flight_label,
             speed,
+            esc_speeds[LEFT_FRONT_ESC_OUTPUT],
+            esc_speeds[RIGHT_FRONT_ESC_OUTPUT],
+            esc_speeds[LEFT_REAR_ESC_OUTPUT],
+            esc_speeds[RIGHT_REAR_ESC_OUTPUT],
+            hover_side_boost,
+            hover_pitch_boost,
+            transition_front_boost,
             mount,
             front_mount,
             left_rear_mount,
@@ -614,9 +763,16 @@ def apply_rc_outputs(controller, channels):
             elevator,
             rudder,
             rudder_output,
+            right_stick_lr_offset,
+            right_stick_ud_offset,
+            left_stick_lr_offset,
+            rear_aileron_offset,
+            rear_yaw_offset,
+            hover_mount_pitch_offset,
             "on" if rudder_control else "off",
             "on" if rear_mount_control else "off",
             "on" if rear_aileron_control else "off",
+            "on" if rear_yaw_control else "off",
             "on" if lights_on else "off",
             light,
         )

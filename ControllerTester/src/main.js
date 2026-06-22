@@ -3,6 +3,20 @@ import "./styles.css";
 
 const app = document.querySelector("#app");
 const TOF_CHANNELS = [0, 1, 2, 3, 6];
+const TOF_SENSOR_TYPES = {
+  0: "VL53L1X",
+  1: "VL53L1X",
+  2: "VL53L0X",
+  3: "VL53L0X",
+  6: "VL53L1X",
+};
+const TOF_LABELS = {
+  0: "Bottom / TOF0",
+  1: "Top / TOF1",
+  2: "Right / TOF2",
+  3: "Left / TOF3",
+  6: "Front / TOF5 / CH6",
+};
 const ORIENTATION_MAP_VERSION = 2;
 const DEFAULT_ORIENTATION_MAP = {
   version: ORIENTATION_MAP_VERSION,
@@ -34,36 +48,36 @@ const RC_MAPPING_ROWS = [
     channel: "RC1",
     control: "RSH",
     plane: "Rear mount aileron mix: CH6 and CH8 move differentially.",
-    transition: "Displayed only; no PCA9685 output in current firmware.",
-    hover: "Displayed only; no PCA9685 output in current firmware.",
+    transition: "Rear mount aileron mix: CH6 and CH8 move differentially.",
+    hover: "Side-to-side hover mix: stick right boosts CH1 and CH5; stick left boosts CH3 and CH7. Joystick ESC authority is capped at 60%.",
   },
   {
     channel: "RC2",
     control: "RSV",
     plane: "Elevator stick drives CH9.",
-    transition: "Elevator stick drives CH9.",
-    hover: "Elevator stick drives CH9.",
+    transition: "Elevator stick drives CH9 and slightly boosts the front ESCs on CH1 and CH3.",
+    hover: "Pitch hover mix: stick up boosts rear ESCs CH5/CH7 and nudges rear mounts up; stick back boosts front ESCs CH1/CH3 and lowers front mounts.",
   },
   {
     channel: "RC3",
     control: "LSV",
-    plane: "Throttle drives ESC outputs CH1, CH3, CH5, and CH7.",
-    transition: "Throttle drives ESC outputs CH1, CH3, CH5, and CH7.",
-    hover: "Throttle drives ESC outputs CH1, CH3, CH5, and CH7.",
+    plane: "Throttle drives ESC outputs CH1, CH3, CH5, and CH7 up to 60% joystick authority.",
+    transition: "Throttle drives ESC outputs CH1, CH3, CH5, and CH7 up to 60% joystick authority.",
+    hover: "Throttle drives ESC outputs CH1, CH3, CH5, and CH7 up to 60% joystick authority; remaining 40% is reserved for future Pico PID output.",
   },
   {
     channel: "RC4",
     control: "LSH",
     plane: "Rudder stick drives CH10. Rear yaw tilt is disabled.",
-    transition: "Rudder drives CH10 and rear yaw tilt. Right rudder moves CH6; left rudder moves CH8.",
+    transition: "Rudder drives CH10 and also adds rear mount aileron/yaw mix on CH6 and CH8.",
     hover: "Rear yaw tilt only. CH10 rudder output stays centered at 1500 us.",
   },
   {
     channel: "RC5",
     control: "MODE",
-    plane: "Low switch selects Mode 1 and sets front mount base to 1000 us.",
-    transition: "Middle switch selects Mode 2 and sets mount base to 1500 us.",
-    hover: "High switch selects Mode 3 and sets mount base to 2000 us.",
+    plane: "Low switch selects Mode 1: front mounts straight ahead, rear mounts straight back.",
+    transition: "Middle switch selects Mode 2: mounts move to the transition midpoint.",
+    hover: "High switch selects Mode 3: front mounts up and rear mounts down; rear motors are mounted opposite the front pair.",
   },
   {
     channel: "RC6",
@@ -92,6 +106,10 @@ const RC_DISPLAY_MODES = ["", "", "", "", "flight", "", "switch", ""];
 
 function makeEmptyTofReadings() {
   return Object.fromEntries(TOF_CHANNELS.map((channel) => [channel, null]));
+}
+
+function makeDefaultTofTypes() {
+  return { ...TOF_SENSOR_TYPES };
 }
 
 app.innerHTML = `
@@ -182,7 +200,7 @@ app.innerHTML = `
           <div><span class="label">Pitch</span><strong id="pitch-value">--</strong></div>
           <div><span class="label">Roll</span><strong id="roll-value">--</strong></div>
           <div><span class="label">Accel Z</span><strong id="z-value">--</strong></div>
-          <div><span class="label">Altitude TOF0</span><strong id="altitude">--</strong></div>
+          <div><span class="label">Bottom TOF0</span><strong id="altitude">--</strong></div>
         </div>
       </div>
     </section>
@@ -224,13 +242,13 @@ app.innerHTML = `
         </div>
         <div>
           <span>Distance sensors</span>
-          <p class="range-guide">VL53L0X: best 50-1000 mm, extended 1000-2000 mm.</p>
+          <p class="range-guide">Bottom, top, and front are VL53L1X: best 50-3000 mm, extended 3000-4000 mm. Left/right remain VL53L0X: best 50-1000 mm.</p>
           <div id="range-line" class="range-grid">
-            <div data-tof="0"><span>TOF0</span><strong>--</strong><em>waiting</em></div>
-            <div data-tof="1"><span>Top / TOF1</span><strong>--</strong><em>waiting</em></div>
-            <div data-tof="2"><span>Right / TOF2</span><strong>--</strong><em>waiting</em></div>
-            <div data-tof="3"><span>Left / TOF3</span><strong>--</strong><em>waiting</em></div>
-            <div data-tof="6"><span>Forward TOF5 / CH6</span><strong>--</strong><em>waiting</em></div>
+            <div data-tof="0"><span>Bottom / TOF0 / VL53L1X</span><strong>--</strong><em>waiting</em></div>
+            <div data-tof="1"><span>Top / TOF1 / VL53L1X</span><strong>--</strong><em>waiting</em></div>
+            <div data-tof="2"><span>Right / TOF2 / VL53L0X</span><strong>--</strong><em>waiting</em></div>
+            <div data-tof="3"><span>Left / TOF3 / VL53L0X</span><strong>--</strong><em>waiting</em></div>
+            <div data-tof="6"><span>Front / TOF5 / CH6 / VL53L1X</span><strong>--</strong><em>waiting</em></div>
           </div>
         </div>
       </div>
@@ -339,13 +357,13 @@ app.innerHTML = `
             </div>
           </div>
           <div class="mux-grid">
-            <div><span>HW-617 CH0</span><strong>UL53LDK #0</strong><em>VIN/VCC, GND, SC0, SD0</em></div>
-            <div><span>HW-617 CH1</span><strong>UL53LDK #1</strong><em>VIN/VCC, GND, SC1, SD1</em></div>
-            <div><span>HW-617 CH2</span><strong>UL53LDK #2</strong><em>VIN/VCC, GND, SC2, SD2</em></div>
-            <div><span>HW-617 CH3</span><strong>UL53LDK #3</strong><em>VIN/VCC, GND, SC3, SD3</em></div>
+            <div><span>HW-617 CH0</span><strong>Bottom TOF0 / VL53L1X</strong><em>VIN/VCC, GND, SC0, SD0</em></div>
+            <div><span>HW-617 CH1</span><strong>Top TOF1 / VL53L1X</strong><em>VIN/VCC, GND, SC1, SD1</em></div>
+            <div><span>HW-617 CH2</span><strong>Right TOF2 / VL53L0X</strong><em>VIN/VCC, GND, SC2, SD2</em></div>
+            <div><span>HW-617 CH3</span><strong>Left TOF3 / VL53L0X</strong><em>VIN/VCC, GND, SC3, SD3</em></div>
             <div class="mag-channel"><span>HW-617 CH4</span><strong>GY-271 compass</strong><em>VCC, GND, SC4/SCL, SD4/SDA</em></div>
             <div class="mag-channel"><span>HW-617 CH5</span><strong>MPU-6050 IMU</strong><em>VCC, GND, SC5/SCL, SD5/SDA</em></div>
-            <div><span>HW-617 CH6</span><strong>Forward TOF5</strong><em>VIN/VCC, GND, SC6/SCL, SD6/SDA</em></div>
+            <div><span>HW-617 CH6</span><strong>Front TOF5 / VL53L1X</strong><em>VIN/VCC, GND, SC6/SCL, SD6/SDA</em></div>
             <div class="mag-channel"><span>HW-617 CH7</span><strong>PCA9685 PWM driver</strong><em>VCC, GND, SC7/SCL, SD7/SDA</em></div>
           </div>
         </section>
@@ -502,6 +520,7 @@ const state = {
     forward: null,
   },
   tof: makeEmptyTofReadings(),
+  tofTypes: makeDefaultTofTypes(),
   rc: [null, null, null, null, null, null, null, null],
   flightMode: "flightmode1",
   flightLabel: "Plane",
@@ -580,11 +599,11 @@ function makePlaneRig() {
   group.userData.shadow = shadow;
 
   const obstacles = {
-    ground: makeTofBoundary(0xffd166, "Ground / TOF0"),
-    top: makeTofBoundary(0xffd166, "Ceiling / TOF1"),
+    ground: makeTofBoundary(0xffd166, "Bottom / TOF0 / VL53L1X"),
+    top: makeTofBoundary(0xffd166, "Top / TOF1 / VL53L1X"),
     right: makeTofBoundary(0x7bc7ff, "Right wall / TOF2"),
     left: makeTofBoundary(0xff8b90, "Left wall / TOF3"),
-    forward: makeTofBoundary(0x2fd39e, "Forward TOF5 / CH6"),
+    forward: makeTofBoundary(0x2fd39e, "Front TOF5 / CH6 / VL53L1X"),
   };
   for (const obstacle of Object.values(obstacles)) {
     group.add(obstacle);
@@ -1071,6 +1090,7 @@ function parseSensorLine(line) {
     z: Number(match.groups.z),
     heading: Number(match.groups.heading),
     tof: parseTofFields(line),
+    tofTypes: parseTofTypeFields(line),
     attitude: parseAttitudeFields(line),
     rc,
     flightMode: flight.mode,
@@ -1088,6 +1108,17 @@ function parseTofFields(line) {
     }
   }
   return distances;
+}
+
+function parseTofTypeFields(line) {
+  const types = makeDefaultTofTypes();
+  for (const match of line.matchAll(/toftype(\d+)=(VL53L[01]X|None)/g)) {
+    const index = Number(match[1]);
+    if (TOF_CHANNELS.includes(index)) {
+      types[index] = match[2];
+    }
+  }
+  return types;
 }
 
 function parseAttitudeFields(line) {
@@ -1237,6 +1268,7 @@ function applyReading(reading) {
   state.mappedY = mapped.y;
   state.heading = headingFromAxes(mapped.x, mapped.y);
   state.tof = reading.tof ?? makeEmptyTofReadings();
+  state.tofTypes = reading.tofTypes ?? makeDefaultTofTypes();
   state.rc = reading.rc ?? [null, null, null, null, null, null, null, null];
   state.flightMode = reading.flightMode ?? "flightmode1";
   state.flightLabel = reading.flightLabel ?? flightModeLabel(state.flightMode);
@@ -1371,9 +1403,13 @@ function updateObstacleTargets() {
 function updateTofReadout() {
   const cells = [...els.rangeLine.querySelectorAll("[data-tof]")];
   for (const cell of cells) {
-    const value = state.tof[Number(cell.dataset.tof)];
+    const channel = Number(cell.dataset.tof);
+    const value = state.tof[channel];
+    const sensorType = state.tofTypes[channel] ?? TOF_SENSOR_TYPES[channel] ?? "TOF";
+    const labelEl = cell.querySelector("span");
     const valueEl = cell.querySelector("strong");
     const statusEl = cell.querySelector("em");
+    labelEl.textContent = `${TOF_LABELS[channel] ?? `TOF${channel}`} / ${sensorType}`;
     cell.className = "";
     if (value === null || value === undefined) {
       valueEl.textContent = "--";
@@ -1388,16 +1424,21 @@ function updateTofReadout() {
       cell.classList.add("range-error");
     } else {
       valueEl.textContent = `${value} mm`;
-      const status = classifyTofRange(value);
+      const status = classifyTofRange(value, sensorType);
       statusEl.textContent = status.label;
       cell.classList.add(status.className);
     }
   }
 }
 
-function classifyTofRange(value) {
+function classifyTofRange(value, sensorType) {
   if (value < 30) return { label: "too close", className: "range-bad" };
   if (value < 50) return { label: "close edge", className: "range-edge" };
+  if (sensorType === "VL53L1X") {
+    if (value <= 3000) return { label: "best range", className: "range-good" };
+    if (value <= 4000) return { label: "extended/noisy", className: "range-edge" };
+    return { label: "out of range", className: "range-bad" };
+  }
   if (value <= 1000) return { label: "best range", className: "range-good" };
   if (value <= 2000) return { label: "extended/noisy", className: "range-edge" };
   return { label: "out of range", className: "range-bad" };
@@ -1755,6 +1796,7 @@ function runDemo(time) {
       null,
       Math.round(700 + Math.sin(t * 0.8 + 4) * 240),
     ],
+    tofTypes: makeDefaultTofTypes(),
     rc,
     flightMode,
     flightLabel: flightModeLabel(flightMode),
@@ -1766,7 +1808,7 @@ function runDemo(time) {
       650 + Math.sin(t * 0.9 + 2) * 210,
     )} tof3=${Math.round(780 + Math.sin(t * 0.4 + 3) * 260)} tof6=${Math.round(
       700 + Math.sin(t * 0.8 + 4) * 240,
-    )} ax=${(
+    )} toftype0=VL53L1X toftype1=VL53L1X toftype2=VL53L0X toftype3=VL53L0X toftype6=VL53L1X ax=${(
       Math.sin(t * 0.65) * 0.45
     ).toFixed(3)} ay=${(Math.sin(t * 0.9) * 0.5).toFixed(3)} az=0.920 pitch=${(
       Math.sin(t * 0.65) * 22
