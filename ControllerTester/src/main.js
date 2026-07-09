@@ -88,21 +88,21 @@ const RC_MAPPING_ROWS = [
   },
   {
     channel: "RC7",
-    control: "LIGHTS",
-    plane: "MEUS Racing AUX RC light switch drives CH12 low/off or high/on for the LTVystore 5mm 5V LEDs.",
-    transition: "MEUS Racing AUX RC light switch drives CH12 low/off or high/on for the LTVystore 5mm 5V LEDs.",
-    hover: "MEUS Racing AUX RC light switch drives CH12 low/off or high/on for the LTVystore 5mm 5V LEDs.",
+    control: "RC/PID",
+    plane: "Low selects RC mode and cycles lights to slow blink; high selects PID mode and cycles lights to fast blink.",
+    transition: "Low selects RC mode and cycles lights to slow blink; high selects PID mode with blended stabilization and fast blink.",
+    hover: "Low selects RC mode and cycles lights to slow blink; high selects PID hover hold and cycles lights to fast blink.",
   },
   {
     channel: "RC8",
-    control: "Arc left",
-    plane: "Displayed only; no PCA9685 output in current firmware.",
-    transition: "Displayed only; no PCA9685 output in current firmware.",
-    hover: "Displayed only; no PCA9685 output in current firmware.",
+    control: "GAIN",
+    plane: "Trainer/PID gain: low gives 25% authority; high gives full manual authority and full PID reaction.",
+    transition: "Trainer/PID gain: low gives 25% authority; high gives full manual authority and full blended PID reaction.",
+    hover: "Trainer/PID gain: low gives 25% authority; high gives full manual authority and full hover PID reaction.",
   },
 ];
 
-const RC_DISPLAY_MODES = ["", "", "", "", "flight", "", "switch", ""];
+const RC_DISPLAY_MODES = ["", "", "", "", "flight", "", "switch", "gain"];
 
 function makeEmptyTofReadings() {
   return Object.fromEntries(TOF_CHANNELS.map((channel) => [channel, null]));
@@ -176,9 +176,9 @@ app.innerHTML = `
             <div class="rc-channel rc-vertical" data-channel="2"><span>RSV</span><i><b></b></i><strong>--</strong><em>CH2</em></div>
             <div class="rc-channel" data-channel="4"><span>LSH</span><i><b></b></i><strong>--</strong><em>CH4</em></div>
             <div class="rc-channel" data-channel="1"><span>RSH</span><i><b></b></i><strong>--</strong><em>CH1</em></div>
-            <div class="rc-channel" data-channel="7" data-mode="switch"><span>CH7</span><i><b></b></i><strong>--</strong><em>MEUS AUX</em></div>
+            <div class="rc-channel" data-channel="7" data-mode="control"><span>CH7</span><i><b></b></i><strong>--</strong><em>RC / PID</em></div>
             <div class="rc-channel" data-channel="5" data-mode="flight"><span>CH5</span><i><b></b></i><strong>--</strong><em>MODE</em></div>
-            <div class="rc-channel rc-arc rc-arc-left" data-channel="8" data-mode="arc-left"><span>CH8</span><i><b></b></i><strong>--</strong><em>LEFT -> TOP</em></div>
+            <div class="rc-channel rc-arc rc-arc-left" data-channel="8" data-mode="gain"><span>CH8</span><i><b></b></i><strong>--</strong><em>GAIN</em></div>
             <div class="rc-channel rc-arc rc-arc-right" data-channel="6" data-mode="arc-right"><span>CH6</span><i><b></b></i><strong>--</strong><em>BOTTOM -> TOP</em></div>
           </div>
         </div>
@@ -239,6 +239,10 @@ app.innerHTML = `
         <div>
           <span>IMU attitude</span>
           <code id="attitude-line">--</code>
+        </div>
+        <div>
+          <span>Control assist</span>
+          <code id="pid-line">RC mode</code>
         </div>
         <div>
           <span>Distance sensors</span>
@@ -439,6 +443,7 @@ const els = {
   rawLine: document.querySelector("#raw-line"),
   fieldLine: document.querySelector("#field-line"),
   attitudeLine: document.querySelector("#attitude-line"),
+  pidLine: document.querySelector("#pid-line"),
   rangeLine: document.querySelector("#range-line"),
   rcLine: document.querySelector("#rc-line"),
   flightModeCard: document.querySelector("#flight-mode-card"),
@@ -524,6 +529,10 @@ const state = {
   rc: [null, null, null, null, null, null, null, null],
   flightMode: "flightmode1",
   flightLabel: "Plane",
+  controlMode: "rc",
+  pidStatus: "off",
+  pid: { pitch: 0, roll: 0, yaw: 0, altitude: 0 },
+  lightMode: "solid",
 };
 
 const renderer = new THREE.WebGLRenderer({
@@ -1082,6 +1091,7 @@ function parseSensorLine(line) {
 
   const rc = parseRcFields(line);
   const flight = parseFlightModeFields(line, rc);
+  const control = parseControlFields(line, rc);
 
   return {
     sensor: match.groups.sensor.trim(),
@@ -1095,7 +1105,36 @@ function parseSensorLine(line) {
     rc,
     flightMode: flight.mode,
     flightLabel: flight.label,
+    controlMode: control.mode,
+    pidStatus: control.pidStatus,
+    pid: control.pid,
+    lightMode: control.lightMode,
     raw: line.trim(),
+  };
+}
+
+function parseToken(line, name) {
+  const match = line.match(new RegExp(`\\b${name}=([^\\s]+)`));
+  return match ? match[1] : null;
+}
+
+function parseNumberToken(line, name) {
+  const value = parseToken(line, name);
+  return value !== null && /^-?\d+(?:\.\d+)?$/.test(value) ? Number(value) : 0;
+}
+
+function parseControlFields(line, rc) {
+  const mode = parseToken(line, "control") ?? (typeof rc[6] === "number" && rc[6] >= 1500 ? "pid" : "rc");
+  return {
+    mode,
+    pidStatus: parseToken(line, "pidstatus") ?? (mode === "pid" ? "hold" : "off"),
+    lightMode: parseToken(line, "lightmode") ?? "solid",
+    pid: {
+      pitch: parseNumberToken(line, "pidpitch"),
+      roll: parseNumberToken(line, "pidroll"),
+      yaw: parseNumberToken(line, "pidyaw"),
+      altitude: parseNumberToken(line, "pidalt"),
+    },
   };
 }
 
@@ -1272,6 +1311,10 @@ function applyReading(reading) {
   state.rc = reading.rc ?? [null, null, null, null, null, null, null, null];
   state.flightMode = reading.flightMode ?? "flightmode1";
   state.flightLabel = reading.flightLabel ?? flightModeLabel(state.flightMode);
+  state.controlMode = reading.controlMode ?? "rc";
+  state.pidStatus = reading.pidStatus ?? "off";
+  state.pid = reading.pid ?? { pitch: 0, roll: 0, yaw: 0, altitude: 0 };
+  state.lightMode = reading.lightMode ?? "solid";
   state.ax = reading.attitude?.ax ?? 0;
   state.ay = reading.attitude?.ay ?? 0;
   state.az = reading.attitude?.az ?? 0;
@@ -1313,6 +1356,10 @@ function applyReading(reading) {
         2,
       )}g pitch=${state.pitch.toFixed(1)} roll=${state.roll.toFixed(1)}`
     : "IMU not detected";
+  els.pidLine.textContent =
+    state.controlMode === "pid"
+      ? `PID ${state.pidStatus}: pitch ${state.pid.pitch} roll ${state.pid.roll} yaw ${state.pid.yaw} alt ${state.pid.altitude}; lights ${state.lightMode}`
+      : `RC mode; lights ${state.lightMode}`;
   if (state.sensor === "Receiver / waiting") {
     els.status.textContent = "Pico is sending data; I2C sensors are not detected";
   } else {
@@ -1332,7 +1379,7 @@ function updateFlightModeReadout() {
   els.flightModeCard.querySelector("em").textContent = flightModeLabel(state.flightMode);
   els.flightMode.textContent = `${els.flightModeCard.querySelector("strong").textContent} / ${flightModeLabel(
     state.flightMode,
-  )}`;
+  )} / ${state.controlMode.toUpperCase()}`;
 }
 
 function handleDiagnosticLine(line) {
@@ -1498,6 +1545,13 @@ function formatRcValue(value, mode) {
   }
   if (mode === "switch") {
     return value >= 1500 ? "ON" : "OFF";
+  }
+  if (mode === "control") {
+    return value >= 1500 ? "PID" : "RC";
+  }
+  if (mode === "gain") {
+    const percent = Math.round(25 + ((Math.min(Math.max(value, 1000), 2000) - 1000) * 75) / 1000);
+    return `${percent}%`;
   }
   if (mode === "three") {
     if (value < 1300) return "TOP";
@@ -1773,6 +1827,7 @@ function runDemo(time) {
   const heading = (t * 28) % 360;
   const rc = demoRcChannels(t);
   const flightMode = rc[4] < 1300 ? "flightmode1" : rc[4] > 1700 ? "flightmode3" : "flightmode2";
+  const controlMode = rc[6] >= 1500 ? "pid" : "rc";
   applyReading({
     sensor: "Demo motion",
     x: Math.cos(t) * 420,
@@ -1800,6 +1855,10 @@ function runDemo(time) {
     rc,
     flightMode,
     flightLabel: flightModeLabel(flightMode),
+    controlMode,
+    pidStatus: controlMode === "pid" ? "hold" : "off",
+    pid: controlMode === "pid" ? { pitch: 12, roll: -8, yaw: 5, altitude: 20 } : { pitch: 0, roll: 0, yaw: 0, altitude: 0 },
+    lightMode: controlMode === "pid" ? "fast" : "slow",
     raw: `sensor=Demo motion x=${Math.round(Math.cos(t) * 420)} y=${Math.round(
       Math.sin(t * 0.8) * 260,
     )} z=${Math.round(Math.sin(t * 0.6) * 180)} heading=${heading.toFixed(1)} tof0=${Math.round(
@@ -1814,7 +1873,9 @@ function runDemo(time) {
       Math.sin(t * 0.65) * 22
     ).toFixed(1)} roll=${(Math.sin(t * 0.9) * 38).toFixed(1)} ${rc
       .map((value, index) => `rc${index + 1}=${value}`)
-      .join(" ")} flightmode=${flightMode}`,
+      .join(" ")} flightmode=${flightMode} control=${controlMode} pidstatus=${
+      controlMode === "pid" ? "hold" : "off"
+    } pidpitch=12 pidroll=-8 pidyaw=5 pidalt=20 lightmode=${controlMode === "pid" ? "fast" : "slow"}`,
   });
 }
 

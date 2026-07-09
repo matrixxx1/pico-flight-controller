@@ -32,15 +32,27 @@ PCA9685_MUX_CHANNEL = 7
 
 PCA_FREQ_HZ = 50
 PCA_OSC_HZ = 25_000_000
-PULSE_MIN_US = 1000
+PULSE_MIN_US = 500
 PULSE_MID_US = 1500
-PULSE_MAX_US = 2000
+PULSE_MAX_US = 2500
+PULSE_THROW_US = PULSE_MAX_US - PULSE_MID_US
+ESC_MIN_US = 1000
+ESC_MAX_US = 2000
 RC_THROTTLE_MAX_US = 1600
 RC_INPUT_MIN_US = 1000
 RC_INPUT_MAX_US = 2000
+RC_INPUT_MID_US = 1500
+RC_INPUT_THROW_US = 500
+RC_INPUT_DEADBAND_US = 6
+LIGHT_OFF_US = 1000
+LIGHT_ON_US = 2000
 LIGHT_SWITCH_US = 1500
+CONTROL_MODE_SWITCH_US = 1500
 MOUNT_LOW_THRESHOLD_US = 1300
 MOUNT_HIGH_THRESHOLD_US = 1700
+MOUNT_FLIGHT_US = 1580
+MOUNT_HOVER_US = 2250
+MOUNT_TRANSITION_US = (MOUNT_FLIGHT_US + MOUNT_HOVER_US) // 2
 RUDDER_LEFT_THRESHOLD_US = 1300
 RUDDER_RIGHT_THRESHOLD_US = 1700
 RUDDER_DEADBAND_US = 40
@@ -70,6 +82,30 @@ LIGHT_OUTPUT = 11
 HOVER_SIDE_ESC_BOOST_US = 150
 PITCH_ESC_BOOST_US = 150
 HOVER_PITCH_MOUNT_ADJUST_US = 150
+REAR_AILERON_AUTHORITY_PERCENT = 50
+TRANSITION_REAR_AILERON_AUTHORITY_PERCENT = 25
+TRAINER_GAIN_MIN_PERCENT = 25
+TRAINER_GAIN_MAX_PERCENT = 100
+CONTROL_MODE_RC = "rc"
+CONTROL_MODE_PID = "pid"
+LIGHT_MODE_SOLID = 0
+LIGHT_MODE_SLOW_BLINK = 1
+LIGHT_MODE_FAST_BLINK = 2
+LIGHT_PULSE_INTERVAL_US = 250_000
+PID_OUTPUT_LIMIT_US = 80
+PID_LEVEL_KP = 5.0
+PID_LEVEL_KI = 0.02
+PID_LEVEL_KD = 0.8
+PID_HEADING_KP = 1.4
+PID_HEADING_KI = 0.01
+PID_HEADING_KD = 0.35
+PID_ALTITUDE_KP = 0.18
+PID_ALTITUDE_KI = 0.005
+PID_ALTITUDE_KD = 0.08
+PID_COMMAND_PITCH_DEG = 8.0
+PID_COMMAND_ROLL_DEG = 8.0
+PID_COMMAND_YAW_DEG = 4.0
+PID_COMMAND_ALTITUDE_MM = 20.0
 
 PPM_PIN = 15
 RC_CHANNELS = 8
@@ -111,6 +147,14 @@ def heading_degrees(x, y):
     if heading < 0:
         heading += 360
     return heading
+
+
+def normalize_degrees(degrees):
+    while degrees > 180:
+        degrees -= 360
+    while degrees < -180:
+        degrees += 360
+    return degrees
 
 
 class ExpSmoother:
@@ -170,6 +214,173 @@ class PPMReceiver:
         if last_frame_us == 0 or ticks_diff(ticks_us(), last_frame_us) > PPM_STALE_US:
             return [None] * self.channel_count
         return values
+
+
+class RCInputFilter:
+    def __init__(self, channel_count=RC_CHANNELS, deadband_us=RC_INPUT_DEADBAND_US):
+        self.deadband_us = deadband_us
+        self.values = [None] * channel_count
+
+    def update(self, channels):
+        filtered = []
+        for index, value in enumerate(channels):
+            previous = self.values[index]
+            if value is None:
+                self.values[index] = None
+                filtered.append(None)
+            elif previous is None or abs(value - previous) > self.deadband_us:
+                self.values[index] = value
+                filtered.append(value)
+            else:
+                filtered.append(previous)
+        return filtered
+
+
+class LightPatternController:
+    def __init__(self):
+        self.current_mode = LIGHT_MODE_SOLID
+        self.target_mode = None
+        self.remaining_steps = 0
+        self.output_on = True
+        self.last_step_us = ticks_us()
+
+    def set_target(self, target_mode):
+        target_mode = int(clamp(target_mode, LIGHT_MODE_SOLID, LIGHT_MODE_FAST_BLINK))
+        if self.target_mode == target_mode and self.remaining_steps > 0:
+            return
+        if self.current_mode == target_mode:
+            self.target_mode = target_mode
+            return
+        cycles = (target_mode - self.current_mode) % 3
+        self.remaining_steps = cycles * 2
+        self.target_mode = target_mode
+        self.last_step_us = ticks_us() - LIGHT_PULSE_INTERVAL_US
+
+    def update(self):
+        if self.remaining_steps > 0 and ticks_diff(ticks_us(), self.last_step_us) >= LIGHT_PULSE_INTERVAL_US:
+            self.output_on = not self.output_on
+            self.remaining_steps -= 1
+            self.last_step_us = ticks_us()
+            if self.remaining_steps == 0:
+                self.output_on = True
+                self.current_mode = self.target_mode
+        return LIGHT_ON_US if self.output_on else LIGHT_OFF_US
+
+    def label(self):
+        if self.current_mode == LIGHT_MODE_FAST_BLINK:
+            return "fast"
+        if self.current_mode == LIGHT_MODE_SLOW_BLINK:
+            return "slow"
+        return "solid"
+
+
+class PIDAxis:
+    def __init__(self, kp, ki, kd, output_limit):
+        self.kp = kp
+        self.ki = ki
+        self.kd = kd
+        self.output_limit = output_limit
+        self.integral = 0.0
+        self.previous_error = 0.0
+        self.last_us = None
+
+    def reset(self):
+        self.integral = 0.0
+        self.previous_error = 0.0
+        self.last_us = None
+
+    def update(self, error):
+        now = ticks_us()
+        if self.last_us is None:
+            dt = REPORT_INTERVAL_S
+        else:
+            dt = max(0.001, ticks_diff(now, self.last_us) / 1_000_000)
+        self.last_us = now
+        self.integral = clamp(self.integral + error * dt, -self.output_limit, self.output_limit)
+        derivative = (error - self.previous_error) / dt
+        self.previous_error = error
+        output = self.kp * error + self.ki * self.integral + self.kd * derivative
+        return int(clamp(output, -self.output_limit, self.output_limit))
+
+
+class FlightPIDController:
+    def __init__(self):
+        self.active = False
+        self.flight_mode = None
+        self.target_pitch = 0.0
+        self.target_roll = 0.0
+        self.target_heading = None
+        self.target_altitude = None
+        self.pitch = PIDAxis(PID_LEVEL_KP, PID_LEVEL_KI, PID_LEVEL_KD, PID_OUTPUT_LIMIT_US)
+        self.roll = PIDAxis(PID_LEVEL_KP, PID_LEVEL_KI, PID_LEVEL_KD, PID_OUTPUT_LIMIT_US)
+        self.heading = PIDAxis(PID_HEADING_KP, PID_HEADING_KI, PID_HEADING_KD, PID_OUTPUT_LIMIT_US)
+        self.altitude = PIDAxis(PID_ALTITUDE_KP, PID_ALTITUDE_KI, PID_ALTITUDE_KD, PID_OUTPUT_LIMIT_US)
+
+    def reset_axes(self):
+        self.pitch.reset()
+        self.roll.reset()
+        self.heading.reset()
+        self.altitude.reset()
+
+    def set_mode(self, enabled, flight_mode, sensor_state):
+        if not enabled:
+            if self.active:
+                self.reset_axes()
+            self.active = False
+            self.flight_mode = None
+            return
+        if not self.active or self.flight_mode != flight_mode:
+            self.active = True
+            self.flight_mode = flight_mode
+            self.reset_axes()
+            pitch = sensor_state.get("pitch")
+            roll = sensor_state.get("roll")
+            heading = sensor_state.get("heading")
+            altitude = sensor_state.get("altitude")
+            if flight_mode == FLIGHT_MODE_3:
+                self.target_pitch = 0.0
+                self.target_roll = 0.0
+            else:
+                self.target_pitch = pitch if pitch is not None else 0.0
+                self.target_roll = roll if roll is not None else 0.0
+            self.target_heading = heading
+            self.target_altitude = altitude
+
+    def corrections(self, sensor_state, flight_mode, command=None, gain_percent=TRAINER_GAIN_MAX_PERCENT):
+        if not self.active:
+            return {"pitch": 0, "roll": 0, "yaw": 0, "altitude": 0, "status": "off"}
+        command = command or {"pitch": 0, "roll": 0, "yaw": 0, "altitude": 0}
+        mode_mix = 1.0
+        if flight_mode == FLIGHT_MODE_2:
+            mode_mix = 0.5
+        gain_mix = clamp(gain_percent, TRAINER_GAIN_MIN_PERCENT, TRAINER_GAIN_MAX_PERCENT) / 100
+        pitch = sensor_state.get("pitch")
+        roll = sensor_state.get("roll")
+        heading = sensor_state.get("heading")
+        altitude = sensor_state.get("altitude")
+        commanded_pitch = self.target_pitch + command.get("pitch", 0)
+        commanded_roll = self.target_roll + command.get("roll", 0)
+        pitch_out = self.pitch.update(commanded_pitch - pitch) if pitch is not None else 0
+        roll_out = self.roll.update(commanded_roll - roll) if roll is not None else 0
+        yaw_out = 0
+        if heading is not None and self.target_heading is not None:
+            yaw_error = normalize_degrees((self.target_heading + command.get("yaw", 0)) - heading)
+            yaw_out = self.heading.update(yaw_error)
+        alt_out = 0
+        if altitude is not None and self.target_altitude is not None and flight_mode != FLIGHT_MODE_1:
+            alt_out = self.altitude.update((self.target_altitude + command.get("altitude", 0)) - altitude)
+        status = "hold"
+        if pitch is None or roll is None:
+            status = "noimu"
+        elif heading is None:
+            status = "noheading"
+        return {
+            "pitch": int(pitch_out * mode_mix * gain_mix),
+            "roll": int(roll_out * mode_mix * gain_mix),
+            "yaw": int(yaw_out * mode_mix * gain_mix),
+            "altitude": int(alt_out * mode_mix * gain_mix),
+            "status": status,
+        }
 
 
 class QMC5883L:
@@ -314,12 +525,12 @@ class PCA9685:
 
     def neutralize(self):
         for output in ESC_OUTPUTS:
-            self.set_pulse_us(output, PULSE_MIN_US)
+            self.set_pulse_us(output, ESC_MIN_US)
         for output in MOUNT_OUTPUTS:
             self.set_pulse_us(output, PULSE_MID_US)
         self.set_pulse_us(ELEVATOR_OUTPUT, PULSE_MID_US)
         self.set_pulse_us(RUDDER_OUTPUT, PULSE_MID_US)
-        self.set_pulse_us(LIGHT_OUTPUT, PULSE_MIN_US)
+        self.set_pulse_us(LIGHT_OUTPUT, LIGHT_OFF_US)
 
 
 class MuxedVL53L0X:
@@ -564,62 +775,103 @@ def find_motion_sensor(i2c, mux):
         return None
 
 
-def read_tof_fields(tof_sensors, smoother):
+def read_tof(tof_sensors, smoother):
     fields = []
+    values = {}
     for channel, tof in tof_sensors:
         value = "None"
+        numeric_value = None
         if tof is not None:
             try:
-                value = str(int(smoother.update(channel, tof.read_mm())))
+                numeric_value = int(smoother.update(channel, tof.read_mm()))
+                value = str(numeric_value)
             except Exception:
                 smoother.reset(channel)
                 value = "err"
         sensor_type = tof.name if tof is not None else "None"
+        values[channel] = numeric_value
         fields.append("tof{}={}".format(channel, value))
         fields.append("toftype{}={}".format(channel, sensor_type))
-    return " ".join(fields)
+    return " ".join(fields), values
 
 
-def read_motion_fields(imu, smoother):
+def read_motion(imu, smoother):
     if imu is None:
         smoother.reset()
-        return "imu=None adxl=None ax=0.000 ay=0.000 az=0.000 pitch=0.0 roll=0.0"
+        return "imu=None adxl=None ax=0.000 ay=0.000 az=0.000 pitch=0.0 roll=0.0", {
+            "present": False,
+            "ax": None,
+            "ay": None,
+            "az": None,
+            "pitch": None,
+            "roll": None,
+        }
     try:
         ax, ay, az = smooth_vector(smoother, "imu", imu.read())
         pitch = math.degrees(math.atan2(-ax, math.sqrt(ay * ay + az * az)))
         roll = math.degrees(math.atan2(ay, az))
         return "imu={} adxl=ok ax={:.3f} ay={:.3f} az={:.3f} pitch={:.1f} roll={:.1f}".format(
             imu.name, ax, ay, az, pitch, roll
-        )
+        ), {"present": True, "ax": ax, "ay": ay, "az": az, "pitch": pitch, "roll": roll}
     except Exception as exc:
         smoother.reset()
-        return "imu=err adxl=err ax=0.000 ay=0.000 az=0.000 pitch=0.0 roll=0.0 imuerr={}".format(exc)
+        return "imu=err adxl=err ax=0.000 ay=0.000 az=0.000 pitch=0.0 roll=0.0 imuerr={}".format(exc), {
+            "present": False,
+            "ax": None,
+            "ay": None,
+            "az": None,
+            "pitch": None,
+            "roll": None,
+        }
 
 
 def clamp(value, low, high):
     return max(low, min(high, value))
 
 
+def map_range(value, in_low, in_high, out_low, out_high):
+    return out_low + ((value - in_low) * (out_high - out_low)) / (in_high - in_low)
+
+
 def rc_pulse_to_servo(value):
     if value is None:
         return PULSE_MID_US
-    return int(clamp(value, RC_INPUT_MIN_US, RC_INPUT_MAX_US))
+    value = clamp(value, RC_INPUT_MIN_US, RC_INPUT_MAX_US)
+    return int(map_range(value, RC_INPUT_MIN_US, RC_INPUT_MAX_US, PULSE_MIN_US, PULSE_MAX_US))
 
 
-def rc_pulse_to_esc(value):
+def scale_from_mid(value, gain_percent):
+    return int(PULSE_MID_US + ((value - PULSE_MID_US) * gain_percent) / 100)
+
+
+def rc_pulse_to_esc(value, gain_percent=TRAINER_GAIN_MAX_PERCENT):
     if value is None:
-        return PULSE_MIN_US
-    return int(clamp(value, RC_INPUT_MIN_US, RC_THROTTLE_MAX_US))
+        return ESC_MIN_US
+    value = clamp(value, RC_INPUT_MIN_US, RC_THROTTLE_MAX_US)
+    return int(ESC_MIN_US + ((value - ESC_MIN_US) * gain_percent) / 100)
+
+
+def rc_gain_percent(value):
+    if value is None:
+        return TRAINER_GAIN_MAX_PERCENT
+    value = clamp(value, RC_INPUT_MIN_US, RC_INPUT_MAX_US)
+    return int(map_range(
+        value,
+        RC_INPUT_MIN_US,
+        RC_INPUT_MAX_US,
+        TRAINER_GAIN_MIN_PERCENT,
+        TRAINER_GAIN_MAX_PERCENT,
+    ))
 
 
 def rc_switch_to_mount(value):
     if value is None:
-        return PULSE_MID_US
+        return MOUNT_FLIGHT_US
     if value < MOUNT_LOW_THRESHOLD_US:
-        return PULSE_MIN_US
+        return MOUNT_FLIGHT_US
     if value > MOUNT_HIGH_THRESHOLD_US:
-        return PULSE_MAX_US
-    return PULSE_MID_US
+        return MOUNT_HOVER_US
+    return MOUNT_TRANSITION_US
 
 
 def rc_switch_to_flight_mode(value):
@@ -630,30 +882,33 @@ def rc_switch_to_flight_mode(value):
     return FLIGHT_MODE_2, "transition"
 
 
-def rc_stick_offset(value):
+def rc_stick_offset(value, gain_percent=TRAINER_GAIN_MAX_PERCENT):
     value = rc_pulse_to_servo(value)
-    offset = clamp(value - PULSE_MID_US, -500, 500)
-    if abs(offset) <= RUDDER_DEADBAND_US:
+    offset = clamp(value - PULSE_MID_US, -PULSE_THROW_US, PULSE_THROW_US)
+    offset = int((offset * gain_percent) / 100)
+    deadband = int((RUDDER_DEADBAND_US * PULSE_THROW_US) / RC_INPUT_THROW_US)
+    if abs(offset) <= deadband:
         return 0
     return offset
 
 
-def rear_yaw_mount_delta(base, rudder_offset):
-    amount = min(abs(rudder_offset), 500)
-    if amount <= RUDDER_DEADBAND_US:
+def rear_yaw_mount_delta(base, rudder_offset, yaw_limit=None):
+    amount = min(abs(rudder_offset), PULSE_THROW_US)
+    deadband = int((RUDDER_DEADBAND_US * PULSE_THROW_US) / RC_INPUT_THROW_US)
+    if amount <= deadband:
         return 0
     if base > PULSE_MID_US:
-        target = PULSE_MIN_US
+        target = PULSE_MIN_US if yaw_limit is None else yaw_limit
     else:
-        target = PULSE_MAX_US
-    return int((target - base) * (amount / 500))
+        target = PULSE_MAX_US if yaw_limit is None else yaw_limit
+    return int((target - base) * (amount / PULSE_THROW_US))
 
 
-def rear_mount_values(base, aileron_offset=0, rudder_offset=0):
-    aileron_offset = clamp(aileron_offset, -500, 500)
+def rear_mount_values(base, aileron_offset=0, rudder_offset=0, yaw_limit=None):
+    aileron_offset = clamp(aileron_offset, -PULSE_THROW_US, PULSE_THROW_US)
     left = base + aileron_offset
     right = base - aileron_offset
-    yaw_delta = rear_yaw_mount_delta(base, rudder_offset)
+    yaw_delta = rear_yaw_mount_delta(base, rudder_offset, yaw_limit)
     if rudder_offset > 0:
         left += yaw_delta
     elif rudder_offset < 0:
@@ -663,65 +918,116 @@ def rear_mount_values(base, aileron_offset=0, rudder_offset=0):
     return left, right
 
 
+def scale_rear_aileron_offset(offset, authority_percent=REAR_AILERON_AUTHORITY_PERCENT):
+    return int((offset * authority_percent) / 100)
+
+
 def add_esc_boost(esc_speeds, outputs, boost):
     if boost <= 0:
         return
     for output in outputs:
-        esc_speeds[output] = int(clamp(esc_speeds[output] + boost, PULSE_MIN_US, RC_THROTTLE_MAX_US))
+        esc_speeds[output] = int(clamp(esc_speeds[output] + boost, ESC_MIN_US, RC_THROTTLE_MAX_US))
 
 
 def stick_boost(offset, max_boost=PITCH_ESC_BOOST_US):
-    return int((min(abs(offset), 500) * max_boost) / 500)
+    return int((min(abs(offset), PULSE_THROW_US) * max_boost) / PULSE_THROW_US)
 
 
-def apply_rc_outputs(controller, channels):
+def apply_rc_outputs(controller, channels, sensor_state=None, pid_controller=None, light_controller=None):
+    sensor_state = sensor_state or {}
     flight_mode, flight_label = rc_switch_to_flight_mode(channels[4])
+    gain_percent = rc_gain_percent(channels[7])
+    control_mode = CONTROL_MODE_PID if channels[6] is not None and channels[6] >= CONTROL_MODE_SWITCH_US else CONTROL_MODE_RC
+    pid = {"pitch": 0, "roll": 0, "yaw": 0, "altitude": 0, "status": "off"}
+    target_light_mode = LIGHT_MODE_FAST_BLINK if control_mode == CONTROL_MODE_PID else LIGHT_MODE_SLOW_BLINK
+    light = LIGHT_ON_US
+    light_mode = "pending"
     if controller is None:
-        return "pca=None flightmode={} flight={}".format(flight_mode, flight_label)
+        if pid_controller is not None:
+            temp_right_stick_lr_offset = rc_stick_offset(channels[0], gain_percent)
+            temp_right_stick_ud_offset = rc_stick_offset(channels[1], gain_percent)
+            temp_left_stick_lr_offset = rc_stick_offset(channels[3], gain_percent)
+            pid_controller.set_mode(control_mode == CONTROL_MODE_PID, flight_mode, sensor_state)
+            temp_command = {
+                "pitch": (temp_right_stick_ud_offset * PID_COMMAND_PITCH_DEG) / PULSE_THROW_US,
+                "roll": (temp_right_stick_lr_offset * PID_COMMAND_ROLL_DEG) / PULSE_THROW_US,
+                "yaw": (temp_left_stick_lr_offset * PID_COMMAND_YAW_DEG) / PULSE_THROW_US,
+                "altitude": (channels[2] - RC_INPUT_MID_US) * PID_COMMAND_ALTITUDE_MM / RC_INPUT_THROW_US
+                if channels[2] is not None else 0,
+            }
+            pid = pid_controller.corrections(sensor_state, flight_mode, temp_command, gain_percent)
+        return "pca=None flightmode={} flight={} control={} gain={} pidstatus={} lightmode={} light={}".format(
+            flight_mode, flight_label, control_mode, gain_percent, pid["status"], light_mode, light
+        )
+    if light_controller is not None:
+        light_controller.set_target(target_light_mode)
+        light = light_controller.update()
+        light_mode = light_controller.label()
+    else:
+        light = LIGHT_ON_US if control_mode == CONTROL_MODE_PID else LIGHT_OFF_US
+        light_mode = "direct"
 
-    speed = rc_pulse_to_esc(channels[2])
-    elevator = rc_pulse_to_servo(channels[1])
-    rudder = rc_pulse_to_servo(channels[3])
-    right_stick_lr_offset = rc_stick_offset(channels[0])
-    right_stick_ud_offset = rc_stick_offset(channels[1])
-    left_stick_lr_offset = rc_stick_offset(channels[3])
-    mount = rc_switch_to_mount(channels[4])
-    lights_on = channels[6] is not None and channels[6] >= LIGHT_SWITCH_US
-    light = PULSE_MAX_US if lights_on else PULSE_MIN_US
-    esc_speeds = [PULSE_MIN_US] * 16
+    speed = rc_pulse_to_esc(channels[2], gain_percent)
+    elevator = scale_from_mid(rc_pulse_to_servo(channels[1]), gain_percent)
+    rudder = scale_from_mid(rc_pulse_to_servo(channels[3]), gain_percent)
+    right_stick_lr_offset = rc_stick_offset(channels[0], gain_percent)
+    right_stick_ud_offset = rc_stick_offset(channels[1], gain_percent)
+    left_stick_lr_offset = rc_stick_offset(channels[3], gain_percent)
+    mount = scale_from_mid(rc_switch_to_mount(channels[4]), gain_percent)
+    if pid_controller is not None:
+        pid_controller.set_mode(control_mode == CONTROL_MODE_PID, flight_mode, sensor_state)
+        command = {
+            "pitch": (right_stick_ud_offset * PID_COMMAND_PITCH_DEG) / PULSE_THROW_US,
+            "roll": (right_stick_lr_offset * PID_COMMAND_ROLL_DEG) / PULSE_THROW_US,
+            "yaw": (left_stick_lr_offset * PID_COMMAND_YAW_DEG) / PULSE_THROW_US,
+            "altitude": (channels[2] - RC_INPUT_MID_US) * PID_COMMAND_ALTITUDE_MM / RC_INPUT_THROW_US
+            if channels[2] is not None else 0,
+        }
+        pid = pid_controller.corrections(sensor_state, flight_mode, command, gain_percent)
+    esc_speeds = [ESC_MIN_US] * 16
     for output in ESC_OUTPUTS:
         esc_speeds[output] = speed
     front_mount = mount
     left_rear_mount = mount
     right_rear_mount = mount
+    elevator_output = elevator
     rudder_output = rudder
+    elevator_control = flight_mode in (FLIGHT_MODE_1, FLIGHT_MODE_2)
     rudder_control = flight_mode in (FLIGHT_MODE_1, FLIGHT_MODE_2)
     rear_mount_control = flight_mode in (FLIGHT_MODE_1, FLIGHT_MODE_2, FLIGHT_MODE_3)
     rear_aileron_control = flight_mode in (FLIGHT_MODE_1, FLIGHT_MODE_2, FLIGHT_MODE_3)
     rear_yaw_control = flight_mode in (FLIGHT_MODE_2, FLIGHT_MODE_3)
     rear_mount_base = mount
-    rear_aileron_offset = right_stick_lr_offset
+    rear_aileron_offset = scale_rear_aileron_offset(right_stick_lr_offset)
     rear_yaw_offset = 0
+    rear_yaw_limit = None
     hover_pitch_boost = 0
     hover_mount_pitch_offset = 0
     transition_front_boost = 0
     if flight_mode == FLIGHT_MODE_2:
-        rear_aileron_offset = clamp(right_stick_lr_offset + left_stick_lr_offset, -500, 500)
+        rear_aileron_offset = scale_rear_aileron_offset(
+            right_stick_lr_offset,
+            TRANSITION_REAR_AILERON_AUTHORITY_PERCENT,
+        )
         rear_yaw_offset = left_stick_lr_offset
+        rear_yaw_limit = MOUNT_FLIGHT_US
         transition_front_boost = stick_boost(right_stick_ud_offset)
         add_esc_boost(esc_speeds, FRONT_ESC_OUTPUTS, transition_front_boost)
     elif flight_mode == FLIGHT_MODE_3:
         rear_aileron_offset = 0
         rear_yaw_offset = left_stick_lr_offset
+        rear_yaw_limit = MOUNT_FLIGHT_US
         hover_pitch_boost = stick_boost(right_stick_ud_offset)
-        hover_mount_pitch_offset = int((min(abs(right_stick_ud_offset), 500) * HOVER_PITCH_MOUNT_ADJUST_US) / 500)
+        hover_mount_pitch_offset = int((min(abs(right_stick_ud_offset), PULSE_THROW_US) * HOVER_PITCH_MOUNT_ADJUST_US) / PULSE_THROW_US)
         if right_stick_ud_offset > 0:
             add_esc_boost(esc_speeds, REAR_ESC_OUTPUTS, hover_pitch_boost)
         elif right_stick_ud_offset < 0:
             add_esc_boost(esc_speeds, FRONT_ESC_OUTPUTS, hover_pitch_boost)
             front_mount = int(clamp(front_mount - hover_mount_pitch_offset, PULSE_MIN_US, PULSE_MAX_US))
 
-    left_rear_mount, right_rear_mount = rear_mount_values(rear_mount_base, rear_aileron_offset, rear_yaw_offset)
+    left_rear_mount, right_rear_mount = rear_mount_values(
+        rear_mount_base, rear_aileron_offset, rear_yaw_offset, rear_yaw_limit
+    )
     hover_side_boost = 0
     if flight_mode == FLIGHT_MODE_3:
         hover_side_boost = stick_boost(right_stick_lr_offset, HOVER_SIDE_ESC_BOOST_US)
@@ -732,8 +1038,32 @@ def apply_rc_outputs(controller, channels):
         if right_stick_ud_offset > 0:
             left_rear_mount = int(clamp(left_rear_mount - hover_mount_pitch_offset, PULSE_MIN_US, PULSE_MAX_US))
             right_rear_mount = int(clamp(right_rear_mount - hover_mount_pitch_offset, PULSE_MIN_US, PULSE_MAX_US))
+    if control_mode == CONTROL_MODE_PID:
+        altitude_correction = pid["altitude"] if flight_mode != FLIGHT_MODE_1 else 0
+        for output in ESC_OUTPUTS:
+            esc_speeds[output] = int(clamp(esc_speeds[output] + altitude_correction, ESC_MIN_US, RC_THROTTLE_MAX_US))
+        if flight_mode in (FLIGHT_MODE_1, FLIGHT_MODE_2):
+            elevator_output = int(clamp(elevator_output + pid["pitch"], PULSE_MIN_US, PULSE_MAX_US))
+            rudder_output = int(clamp(rudder_output + pid["yaw"], PULSE_MIN_US, PULSE_MAX_US))
+            left_rear_mount = int(clamp(left_rear_mount + pid["roll"], PULSE_MIN_US, PULSE_MAX_US))
+            right_rear_mount = int(clamp(right_rear_mount - pid["roll"], PULSE_MIN_US, PULSE_MAX_US))
+        if flight_mode in (FLIGHT_MODE_2, FLIGHT_MODE_3):
+            if pid["pitch"] > 0:
+                add_esc_boost(esc_speeds, REAR_ESC_OUTPUTS, abs(pid["pitch"]))
+            elif pid["pitch"] < 0:
+                add_esc_boost(esc_speeds, FRONT_ESC_OUTPUTS, abs(pid["pitch"]))
+            if pid["roll"] > 0:
+                add_esc_boost(esc_speeds, LEFT_ESC_OUTPUTS, abs(pid["roll"]))
+            elif pid["roll"] < 0:
+                add_esc_boost(esc_speeds, RIGHT_ESC_OUTPUTS, abs(pid["roll"]))
+            if pid["yaw"] > 0:
+                left_rear_mount = int(clamp(left_rear_mount - abs(pid["yaw"]), PULSE_MIN_US, PULSE_MAX_US))
+            elif pid["yaw"] < 0:
+                right_rear_mount = int(clamp(right_rear_mount - abs(pid["yaw"]), PULSE_MIN_US, PULSE_MAX_US))
     if not rudder_control:
         rudder_output = PULSE_MID_US
+    if not elevator_control:
+        elevator_output = PULSE_MID_US
 
     try:
         for output in ESC_OUTPUTS:
@@ -742,12 +1072,14 @@ def apply_rc_outputs(controller, channels):
             controller.set_pulse_us(output, front_mount)
         controller.set_pulse_us(LEFT_REAR_MOUNT_OUTPUT, left_rear_mount)
         controller.set_pulse_us(RIGHT_REAR_MOUNT_OUTPUT, right_rear_mount)
-        controller.set_pulse_us(ELEVATOR_OUTPUT, elevator)
+        controller.set_pulse_us(ELEVATOR_OUTPUT, elevator_output)
         controller.set_pulse_us(RUDDER_OUTPUT, rudder_output)
         controller.set_pulse_us(LIGHT_OUTPUT, light)
-        return "pca=ok flightmode={} flight={} esc={} lfesc={} rfesc={} lresc={} rresc={} hoverboost={} pitchboost={} transfrontboost={} mount={} frontmount={} leftrear={} rightrear={} elevator={} rudder={} rudderout={} rightsticklr={} rightstickud={} leftsticklr={} aileronmix={} yawmix={} pitchmount={} rudderctrl={} rearctrl={} aileronctrl={} yawctrl={} lights={} light={}".format(
+        return "pca=ok flightmode={} flight={} control={} gain={} esc={} lfesc={} rfesc={} lresc={} rresc={} hoverboost={} pitchboost={} transfrontboost={} mount={} frontmount={} leftrear={} rightrear={} elevator={} elevatorout={} rudder={} rudderout={} rightsticklr={} rightstickud={} leftsticklr={} aileronmix={} yawmix={} pitchmount={} pidstatus={} pidpitch={} pidroll={} pidyaw={} pidalt={} elevatorctrl={} rudderctrl={} rearctrl={} aileronctrl={} yawctrl={} lightmode={} light={}".format(
             flight_mode,
             flight_label,
+            control_mode,
+            gain_percent,
             speed,
             esc_speeds[LEFT_FRONT_ESC_OUTPUT],
             esc_speeds[RIGHT_FRONT_ESC_OUTPUT],
@@ -761,6 +1093,7 @@ def apply_rc_outputs(controller, channels):
             left_rear_mount,
             right_rear_mount,
             elevator,
+            elevator_output,
             rudder,
             rudder_output,
             right_stick_lr_offset,
@@ -769,15 +1102,23 @@ def apply_rc_outputs(controller, channels):
             rear_aileron_offset,
             rear_yaw_offset,
             hover_mount_pitch_offset,
+            pid["status"],
+            pid["pitch"],
+            pid["roll"],
+            pid["yaw"],
+            pid["altitude"],
+            "on" if elevator_control else "off",
             "on" if rudder_control else "off",
             "on" if rear_mount_control else "off",
             "on" if rear_aileron_control else "off",
             "on" if rear_yaw_control else "off",
-            "on" if lights_on else "off",
+            light_mode,
             light,
         )
     except Exception as exc:
-        return "pca=err flightmode={} flight={} pcaerr={}".format(flight_mode, flight_label, exc)
+        return "pca=err flightmode={} flight={} control={} gain={} pidstatus={} pcaerr={}".format(
+            flight_mode, flight_label, control_mode, gain_percent, pid["status"], exc
+        )
 
 
 def find_servo_controller(mux):
@@ -808,12 +1149,15 @@ def read_rc_fields(receiver):
 
 def main():
     receiver = PPMReceiver(PPM_PIN)
+    rc_filter = RCInputFilter()
     i2c = None
     mux = None
     sensor = None
     tof_sensors = [(channel, None) for channel in TOF_CHANNELS]
     imu = None
     servo_controller = None
+    pid_controller = FlightPIDController()
+    light_controller = LightPatternController()
     mag_smoother = ExpSmoother(MAG_SMOOTH_ALPHA)
     imu_smoother = ExpSmoother(IMU_SMOOTH_ALPHA)
     tof_smoother = ExpSmoother(TOF_SMOOTH_ALPHA)
@@ -864,48 +1208,55 @@ def main():
             servo_controller = find_servo_controller(mux)
             last_servo_retry = now
 
-        rc_channels = receiver.read()
-        pca_fields = apply_rc_outputs(servo_controller, rc_channels)
-        tof_fields = read_tof_fields(tof_sensors, tof_smoother)
-        motion_fields = read_motion_fields(imu, imu_smoother)
+        rc_channels = rc_filter.update(receiver.read())
+        tof_fields, tof_values = read_tof(tof_sensors, tof_smoother)
+        motion_fields, motion_values = read_motion(imu, imu_smoother)
         rc_fields = "rc=ppm " + " ".join(
             "rc{}={}".format(index, "None" if value is None else value)
             for index, value in enumerate(rc_channels, start=1)
         )
+        sensor_name = "Receiver / waiting"
+        mag_fields = "x=0 y=0 z=0 heading=0.0"
+        heading = None
+        mag_error = ""
 
-        if sensor is None:
-            print(
-                "sensor=Receiver / waiting x=0 y=0 z=0 heading=0.0 {} {} {} {}".format(
-                    tof_fields, motion_fields, rc_fields, pca_fields
-                )
-            )
-        else:
+        if sensor is not None:
             try:
                 x, y, z = smooth_vector(mag_smoother, "mag", sensor.read())
                 heading = heading_degrees(x, y)
+                sensor_name = sensor.name
                 if hasattr(sensor, "raw_to_microtesla"):
                     xu = sensor.raw_to_microtesla(x)
                     yu = sensor.raw_to_microtesla(y)
                     zu = sensor.raw_to_microtesla(z)
-                    print(
-                        "sensor={} x={} y={} z={} xuT={:.2f} yuT={:.2f} zuT={:.2f} heading={:.1f} {} {} {} {}".format(
-                            sensor.name, x, y, z, xu, yu, zu, heading, tof_fields, motion_fields, rc_fields, pca_fields
-                        )
+                    mag_fields = "x={} y={} z={} xuT={:.2f} yuT={:.2f} zuT={:.2f} heading={:.1f}".format(
+                        x, y, z, xu, yu, zu, heading
                     )
                 else:
-                    print(
-                        "sensor={} x={} y={} z={} heading={:.1f} {} {} {} {}".format(
-                            sensor.name, x, y, z, heading, tof_fields, motion_fields, rc_fields, pca_fields
-                        )
-                    )
+                    mag_fields = "x={} y={} z={} heading={:.1f}".format(x, y, z, heading)
             except OSError as exc:
                 mag_smoother.reset()
-                print(
-                    "sensor={} x=0 y=0 z=0 heading=0.0 {} {} {} {} magerr={}".format(
-                        sensor.name, tof_fields, motion_fields, rc_fields, pca_fields, exc
-                    )
-                )
+                sensor_name = sensor.name
+                mag_error = " magerr={}".format(exc)
                 sensor = None
+        sensor_state = {
+            "pitch": motion_values.get("pitch"),
+            "roll": motion_values.get("roll"),
+            "heading": heading,
+            "altitude": tof_values.get(0),
+        }
+        pca_fields = apply_rc_outputs(
+            servo_controller,
+            rc_channels,
+            sensor_state,
+            pid_controller,
+            light_controller,
+        )
+        print(
+            "sensor={} {} {} {} {} {}{}".format(
+                sensor_name, mag_fields, tof_fields, motion_fields, rc_fields, pca_fields, mag_error
+            )
+        )
         sleep(REPORT_INTERVAL_S)
 
 
